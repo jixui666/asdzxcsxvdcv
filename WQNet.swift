@@ -112,7 +112,7 @@ private func netPost(legacyPath: String, params: [String: Any], timeout: TimeInt
     var status = -1
     var transportError: String?
 
-    URLSession.shared.dataTask(with: request) { payload, response, error in
+    WQPinnedSession.shared.session.dataTask(with: request) { payload, response, error in
         if let error = error { transportError = error.localizedDescription }
         data = payload
         status = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -167,7 +167,9 @@ public func wqnet_describe() -> UnsafeMutablePointer<CChar>? {
     let host = WQV2.baseURL.absoluteString
     let configPath = WQV2.v2Path("api/device/report")
     let logPath = WQV2.v2Path("api/log/report")
-    let txt = "host=\(host) config=\(configPath) log=\(logPath) pub=\(WQV2.serverPublicKey.count)B"
+    let pinHost = WQPinnedSession.hostKey()
+    let txt = "host=\(host) config=\(configPath) log=\(logPath) pub=\(WQV2.serverPublicKey.count)B "
+        + "pin=\(WQPinnedSession.enabled ? "on" : "off")/\(pinHost) leafPins=\(WQPinnedSession.leafPins.count)"
     return netCString(txt)
 }
 
@@ -274,7 +276,7 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
     let sem = DispatchSemaphore(value: 0)
     var status = -1
     var ok = false
-    URLSession.shared.dataTask(with: request) { payload, response, error in
+    WQPinnedSession.shared.session.dataTask(with: request) { payload, response, error in
         status = (response as? HTTPURLResponse)?.statusCode ?? -1
         if error == nil, status == 200, let payload = payload,
            let env = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],

@@ -85,7 +85,7 @@ xcrun --sdk iphoneos swiftc \
     -sdk "$SDK" \
     -O -wmo -parse-as-library \
     -emit-object -o "$SWIFT_OBJ" \
-    "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/Generated/Secrets.generated.swift"
+    "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQPinnedSession.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/Generated/Secrets.generated.swift"
 
 xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/ModuleCache" -arch arm64 \
     -include "$ROOT/WQCompat.h" \
