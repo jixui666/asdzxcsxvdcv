@@ -88,9 +88,13 @@ private func netPost(legacyPath: String, params: [String: Any], timeout: TimeInt
     let logLine = "POST \(url.absoluteString)"
     netRecordError(logLine)
 
+    // aad 里绑定了 method/path/appUUID/ts/nonce，服务端用真实路径重算 MAC。
+    // 不传 context（默认 .none，path 为空）会得到 {"code":401,"message":"消息校验失败"}。
+    let uuid = netAppUUID()
+    let context = WQV2.Context(method: "POST", path: realPath, appUUID: uuid)
     let session: WQV2.Session
     do {
-        session = try WQV2.newSession(params)
+        session = try WQV2.newSession(params, context: context)
     } catch {
         netRecordError("\(legacyPath) v2 seal FAILED — \(error.localizedDescription)")
         return .failure("v2 seal failed: \(error.localizedDescription)")
@@ -103,7 +107,7 @@ private func netPost(legacyPath: String, params: [String: Any], timeout: TimeInt
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(netAppUUID(), forHTTPHeaderField: "X-App-UUID")
+    request.setValue(uuid, forHTTPHeaderField: "X-App-UUID")
     request.timeoutInterval = timeout
     request.httpBody = body
 
@@ -245,9 +249,11 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
         "file_md5": md5Hex(fileData),
     ])
 
+    let uploadUUID = netAppUUID()
+    let uploadContext = WQV2.Context(method: "POST", path: realPath, appUUID: uploadUUID)
     let session: WQV2.Session
     do {
-        session = try WQV2.newSession(params)
+        session = try WQV2.newSession(params, context: uploadContext)
     } catch {
         NSLog("[WQNet] upload seal failed: %@", error.localizedDescription)
         return -4
@@ -269,7 +275,7 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-    request.setValue(netAppUUID(), forHTTPHeaderField: "X-App-UUID")
+    request.setValue(uploadUUID, forHTTPHeaderField: "X-App-UUID")
     request.timeoutInterval = netTimeoutUpload
     request.httpBody = body
 
