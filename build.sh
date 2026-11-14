@@ -88,6 +88,7 @@ xcrun --sdk iphoneos swiftc \
     "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/Generated/Secrets.generated.swift"
 
 xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/ModuleCache" -arch arm64 \
+    -include "$ROOT/WQCompat.h" \
     -miphoneos-version-min="$MINIMUM_IOS_VERSION" \
     -isysroot "$SDK" -Wall -Wextra -O2 \
     -framework UIKit -framework Foundation -framework Security -framework UniformTypeIdentifiers -framework CryptoKit \
