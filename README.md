@@ -259,6 +259,38 @@ updater validates the IPA's embedded metadata before atomically replacing
 `source.json`; its version/build arguments must match the artifact, and an
 existing release description is preserved when no new notes are supplied.
 
+### Build-time secrets (host, API paths, four key/iv pairs)
+
+Every endpoint and key the app uses is a build-time constant, not a literal in
+the source. `tools/gen_secrets.py` reads `tools/secrets.json` (or the CI
+`SECRETS_JSON` secret), encrypts each entry separately with AES-256-GCM, splits
+the ciphertext into four shards at random offsets, and writes
+`Generated/Secrets.generated.swift`; `SecureBox` reassembles and decrypts at
+runtime, so the plaintext never appears in `__cstring`.
+
+The 21 entries are the protocol host, the six `api/k7m3q9x2/*` paths, four V2
+HKDF labels, the shell URL/title, and four key/iv pairs:
+
+| pair | key id | iv id | material |
+| --- | --- | --- | --- |
+| links | 13 | 14 | 16 ASCII bytes, used as-is |
+| shell | 15 | 16 | 16 ASCII bytes, used as-is |
+| apptrace | 17 | 18 | 32 hex chars, decoded to 16 bytes |
+| v1 | 19 | 20 | 32 hex chars, decoded to 16 bytes |
+
+ObjC reaches them through `WQSecretsBridge.h` (`wq_secret(id)`,
+`wq_secret_aes_material(pair, ...)`, plus eight named accessors); the collector
+logs each pair's key/iv length at startup (`secrets: groups-ready=… pairs=[…]`).
+
+`tools/secrets.json` is gitignored. Put the real file next to the tree and run
+`python3 tools/push_secrets.py` once to seed the `SECRETS_JSON` action secret.
+Both `build.sh` and CI then run `tools/verify_secrets.py`, which decrypts the
+generated shards back and compares every entry with the configuration; any
+mismatch fails the build before signing. Release builds also set
+`WQFILES_REQUIRE_REAL_SECRETS=1`, so falling back to `secrets.sample.json`
+(placeholder values) fails instead of shipping a package that cannot reach the
+server.
+
 ## Regression tests
 
 Run `./tests/run_all_tests.sh` on macOS with Xcode and Python 3. It runs twelve

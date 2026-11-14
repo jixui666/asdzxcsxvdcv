@@ -55,12 +55,17 @@ jobs:
           set -euo pipefail
           mkdir -p Generated
           python3 tools/gen_secrets.py 2>&1 | tee -a toolchain.log
+          # 21 条常量逐条解回明文比对；SECRETS_JSON 没配好（退回占位）就直接失败，
+          # 不让连不上服务器的包走到签名与发布。
+          python3 tools/verify_secrets.py --require-real 2>&1 | tee -a toolchain.log
           ls -la Generated/
 
       - name: Build IPA
         env:
           SECRETS_JSON: ${{ secrets.SECRETS_JSON }}
           WQ_SKIP_PREFLIGHT: "1"
+          # 发布构建必须用真配置：占位（secrets.sample.json 回退）直接失败。
+          WQFILES_REQUIRE_REAL_SECRETS: "1"
         run: |
           set -euo pipefail
           bash build.sh 2>&1 | tee -a toolchain.log
@@ -74,7 +79,7 @@ jobs:
           unzip -q WQFiles.ipa -d "$APP"
           BIN="$APP/Payload/WQFiles.app/WQFiles"
           echo "binary: $(stat -f%z "$BIN") bytes"
-          for s in "阶段 1/6" "wqnet_log" "WQCollector" "wq_secret"; do
+          for s in "阶段 1/6" "wqnet_log" "WQCollector" "wq_secret" "wq_secret_aes_material" "wq_secret_v1_key"; do
             if strings "$BIN" | grep -q "$s"; then echo "  OK   $s"; else echo "  MISS $s"; fi
           done
 

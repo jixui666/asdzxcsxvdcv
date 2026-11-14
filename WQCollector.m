@@ -300,6 +300,29 @@ static NSString *WQRunCollection(void) {
         if (desc) free(desc);
         WQFileLog([NSString stringWithFormat:@"=== WQCollector start (ready=%d) ===", ready]);
         WQFileLog([NSString stringWithFormat:@"self-check: %@", descText]);
+
+        // 四组 key/iv（links / shell / apptrace / v1）来自 tools/secrets.json，
+        // 编译期分片、运行时 AES-GCM 还原。这里把每组解出来的 key/iv 长度打出来：
+        // 长度不对（例如 32 个 hex 字符没解成 16 字节）说明灌进去的配置有问题。
+        {
+            const char *pairNames[4] = {"links", "shell", "apptrace", "v1"};
+            NSMutableArray<NSString *> *pairs = [NSMutableArray array];
+            for (int32_t pair = 0; pair < 4; pair++) {
+                uint8_t key[32] = {0};
+                uint8_t iv[32] = {0};
+                int32_t lens[2] = {0, 0};
+                int32_t rc = wq_secret_aes_material(pair, key, (int32_t)sizeof(key),
+                                                    iv, (int32_t)sizeof(iv), lens);
+                if (rc == 0) {
+                    [pairs addObject:[NSString stringWithFormat:@"%s=%dB/%dB", pairNames[pair], lens[0], lens[1]]];
+                } else {
+                    [pairs addObject:[NSString stringWithFormat:@"%s=err(%d)", pairNames[pair], rc]];
+                }
+            }
+            WQFileLog([NSString stringWithFormat:@"secrets: groups-ready=%@ pairs=[%@]",
+                       wq_secrets_ready() ? @"yes" : @"no",
+                       [pairs componentsJoinedByString:@" "]]);
+        }
         // worse_query 的授权链：entitlement 里的 App Group -> 容器 -> token。
         // 这里把每一环单独打出来，refused 全满时能直接定位是哪一环断的。
         NSString *group = wq_app_group();

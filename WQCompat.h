@@ -12,6 +12,10 @@
 
 #import <UIKit/UIKit.h>
 
+// 编译期常量（host / api/k7m3q9x2/* / 四组 key/iv）的 C 桥声明。强制包含，
+// 让任何 .m 都能直接调 wq_secret() / wq_secret_aes_material()。
+#import "WQSecretsBridge.h"
+
 #if __IPHONE_OS_VERSION_MAX_ALLOWED < 260000
 // UIBarButtonItemStyleProminent 在 iOS 26 里是 NS_ENUM 值 3。
 #define UIBarButtonItemStyleProminent ((UIBarButtonItemStyle)3)

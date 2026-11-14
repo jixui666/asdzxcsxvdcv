@@ -77,6 +77,17 @@ SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 mkdir -p "$ROOT/Generated"
 python3 "$ROOT/tools/gen_secrets.py"
 
+# 1b) 就地解回明文逐条比对：host + api/k7m3q9x2/* 六条路径 + 四组 key/iv 必须全部还原成
+#     tools/secrets.json（或 CI 的 SECRETS_JSON）里的值。拼接错、layout/lens 错位、
+#     AAD 序号错都会在这里断掉，不会拖到设备上才表现为"能开但连不上服务器"。
+#     发布构建（CI）再加 WQFILES_REQUIRE_REAL_SECRETS=1：退回占位配置就直接失败。
+REQUIRE_REAL=""
+if [[ "${WQFILES_REQUIRE_REAL_SECRETS:-0}" == 1 ]]; then
+    REQUIRE_REAL="--require-real"
+fi
+# shellcheck disable=SC2086 # REQUIRE_REAL 要么是空、要么是单个 flag
+python3 "$ROOT/tools/verify_secrets.py" $REQUIRE_REAL | tee "$OUT/secrets.log"
+
 # 2) 用 swiftc 把 SecureBox + 生成的常量 + ObjC 桥编成 object。
 #    AES-GCM 只有 CryptoKit 有，纯 ObjC 要手写 GHASH，所以这一段走 Swift。
 SWIFT_OBJ="$OUT/WQSecrets.o"
