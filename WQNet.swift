@@ -22,6 +22,7 @@
 import Foundation
 import UIKit
 import Darwin
+import CryptoKit
 
 private let netTimeoutReport: TimeInterval = 30
 private let netTimeoutUpload: TimeInterval = 120
