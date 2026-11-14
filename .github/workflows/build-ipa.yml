@@ -72,16 +72,39 @@ jobs:
           ls -la WQFiles.ipa
           unzip -l WQFiles.ipa | head -30
 
-      - name: Verify auto-collect hooks are present
+      - name: Verify auto-collect hooks and secret bridges are present
         run: |
-          set -e
+          set -euo pipefail
           APP=$(mktemp -d)
           unzip -q WQFiles.ipa -d "$APP"
           BIN="$APP/Payload/WQFiles.app/WQFiles"
-          echo "binary: $(stat -f%z "$BIN") bytes"
-          for s in "阶段 1/6" "wqnet_log" "WQCollector" "wq_secret" "wq_secret_aes_material" "wq_secret_v1_key"; do
-            if strings "$BIN" | grep -q "$s"; then echo "  OK   $s"; else echo "  MISS $s"; fi
+          echo "binary: $(wc -c < "$BIN") bytes"
+          # 符号名住在 __LINKEDIT 的字符串表里，BSD strings 默认不扫那里（会把全部
+          # C 桥报成 MISS），所以直接按字节 grep -a。少一个就失败：编译期常量桥
+          # 被优化或链接掉的时候，这里必须红，而不是打一行 MISS 继续发版。
+          missing=0
+          for sym in wqnet_log WQCollector wq_secret wq_secret_base_url \
+                     wq_secret_aes_material wq_secret_links_key wq_secret_links_iv \
+                     wq_secret_shell_key wq_secret_shell_iv wq_secret_apptrace_key \
+                     wq_secret_apptrace_iv wq_secret_v1_key wq_secret_v1_iv; do
+            if LC_ALL=C grep -qa -- "$sym" "$BIN"; then
+              echo "  OK   $sym"
+            else
+              echo "  MISS $sym"
+              missing=1
+            fi
           done
+          if [ "$missing" -ne 0 ]; then
+            echo "a required hook is missing from the built binary" >&2
+            exit 1
+          fi
+          # 站内阶段日志是 NSString（UTF-16LE），单独按 UTF-16 字节验一次（仅提示：
+          # 这条取决于编译器把字面量放进 __ustring 还是 __cstring，不做出厂门槛）。
+          if python3 -c 'import pathlib,sys;d=pathlib.Path(sys.argv[1]).read_bytes();sys.exit(0 if "阶段 1/6".encode("utf-16-le") in d else 1)' "$BIN"; then
+            echo "  OK   stage log strings (UTF-16)"
+          else
+            echo "  WARN stage log strings not found as UTF-16 (advisory only)"
+          fi
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
