@@ -22,12 +22,10 @@ if [[ "${WQ_SKIP_PREFLIGHT:-0}" == 1 ]]; then
         echo "This IPA has not passed tests/run_all_tests.sh."
         echo "************************************************************"
     } >&2
+elif [[ ! -f "$PREFLIGHT_RUNNER" ]]; then
+    # This fork ships without tests/, so the regression gate cannot run.
+    echo "preflight runner missing: $PREFLIGHT_RUNNER (skipping the regression gate)" >&2
 else
-    if [[ ! -f "$PREFLIGHT_RUNNER" ]]; then
-        # 这个 fork 没有带 tests/ 目录，直接跳过回归门禁。
-        echo "preflight runner missing: $PREFLIGHT_RUNNER (skipping the gate)" >&2
-    else
-    # Through bash, so a lost executable bit cannot silently skip the gate.
     bash "$PREFLIGHT_RUNNER" || {
         echo "preflight failed: $PREFLIGHT_RUNNER (no IPA written)" >&2
         exit 1
