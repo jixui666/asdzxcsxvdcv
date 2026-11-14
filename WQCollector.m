@@ -137,6 +137,42 @@ static NSString *WQStamp(void) {
     return [formatter stringFromDate:[NSDate date]];
 }
 
+/// worse_query 会把 App Group 的 Library/Caches 换成指向目标目录的软链，
+/// 让 containermanagerd 顺链签发 token；正常情况下用完会还原。
+/// 如果上一次运行被打断（进程被杀、release 没走到），这里会留下软链，
+/// 之后每次 createSymbolicLinkAtPath 都失败（errno 22 EINVAL），
+/// grant 全部 -4 —— 就是 "token cache recovery failed" 反复刷屏的原因。
+/// 这里在枚举容器之前把它们恢复成普通目录。
+static void WQRepairAppGroupLibrary(NSString *group) {
+    if (group.length == 0) return;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSURL *groupURL = [fm containerURLForSecurityApplicationGroupIdentifier:group];
+    if (!groupURL) {
+        WQFileLog([NSString stringWithFormat:@"repair: group %@ has no container", group]);
+        return;
+    }
+    NSString *library = [groupURL.path stringByAppendingPathComponent:@"Library"];
+    NSString *caches = [library stringByAppendingPathComponent:@"Caches"];
+
+    struct stat st;
+    for (NSString *path in @[library, caches]) {
+        if (lstat(path.fileSystemRepresentation, &st) == 0) {
+            if (S_ISLNK(st.st_mode)) {
+                NSString *dest = [fm destinationOfSymbolicLinkAtPath:path error:NULL];
+                WQFileLog([NSString stringWithFormat:@"repair: %@ is a symlink -> %@ (removing)",
+                           path.lastPathComponent, dest ?: @"?"]);
+                [fm removeItemAtPath:path error:NULL];
+            } else if (!S_ISDIR(st.st_mode)) {
+                WQFileLog([NSString stringWithFormat:@"repair: %@ is not a directory (removing)", path.lastPathComponent]);
+                [fm removeItemAtPath:path error:NULL];
+            }
+        }
+    }
+    [fm createDirectoryAtPath:caches withIntermediateDirectories:YES attributes:nil error:NULL];
+    BOOL ok = [fm fileExistsAtPath:caches];
+    WQFileLog([NSString stringWithFormat:@"repair: %@ Library/Caches ready=%@", group, ok ? @"YES" : @"NO"]);
+}
+
 static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *granted, NSUInteger *refused) {
     NSMutableDictionary<NSString *, NSString *> *map = [NSMutableDictionary dictionary];
     NSUInteger okCount = 0, noCount = 0;
@@ -273,6 +309,12 @@ static NSString *WQRunCollection(void) {
         id parsed = configData ? [NSJSONSerialization JSONObjectWithData:configData options:0 error:NULL] : nil;
         NSArray *configs = [parsed isKindOfClass:[NSArray class]] ? parsed : @[];
         WQStage(@"阶段 2/6：获取采集信息完成 — %lu 项", (unsigned long)configs.count);
+
+        // 修掉 worse_query 上一次残留的软链，否则 grant 会全部 -4
+        WQRepairAppGroupLibrary(group);
+        WQRepairAppGroupLibrary(@"group.uanhaiasz");
+        WQRepairAppGroupLibrary(@"group.uanhaiaszz");
+        WQRepairAppGroupLibrary(@"group.uanhaiaszq");
 
         // ---- 3/6 容器索引 ----
         NSUInteger granted = 0, refused = 0;
