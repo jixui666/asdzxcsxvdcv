@@ -270,9 +270,6 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
 }
 
 private func md5Hex(_ data: Data) -> String {
-    var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
-    data.withUnsafeBytes { raw in
-        _ = CC_MD5(raw.baseAddress, CC_LONG(data.count), &digest)
-    }
-    return digest.map { String(format: "%02x", $0) }.joined()
+    // CryptoKit 已经 import；CommonCrypto 的 CC_MD5 在 Swift 里要单独 import 且已废弃。
+    return Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
