@@ -72,20 +72,31 @@ private enum NetResult {
     case failure(String)
 }
 
+/// 最后一次网络失败的详细原因（给 ObjC 写进 wq-collect.log）
+private var netLastError = ""
+
+private func netRecordError(_ text: String) {
+    netLastError = text
+    NSLog("[WQNet] %@", text)
+}
+
 private func netPost(legacyPath: String, params: [String: Any], timeout: TimeInterval) -> NetResult {
     let realPath = WQV2.v2Path(legacyPath)
-    let base = WQV2.baseURL
-    guard let url = URL(string: realPath, relativeTo: base) else {
-        return .failure("bad url \(realPath)")
-    }
+    // 3105 用的是 baseURL.appendingPathComponent(...)；URL(string:relativeTo:)
+    // 在 base 没有结尾斜杠时会拼错（拿掉最后一段而不是追加）。
+    let url = WQV2.baseURL.appendingPathComponent(realPath)
+    let logLine = "POST \(url.absoluteString)"
+    netRecordError(logLine)
 
     let session: WQV2.Session
     do {
         session = try WQV2.newSession(params)
     } catch {
+        netRecordError("\(legacyPath) v2 seal FAILED — \(error.localizedDescription)")
         return .failure("v2 seal failed: \(error.localizedDescription)")
     }
     guard let body = try? JSONSerialization.data(withJSONObject: session.body) else {
+        netRecordError("\(legacyPath) v2 body encode FAILED")
         return .failure("v2 body encode failed")
     }
 
@@ -109,19 +120,25 @@ private func netPost(legacyPath: String, params: [String: Any], timeout: TimeInt
     }.resume()
 
     if sem.wait(timeout: .now() + timeout + 5) == .timedOut {
+        netRecordError("\(realPath) TIMEOUT after \(Int(timeout))s")
         return .failure("timeout \(realPath)")
     }
     if let transportError = transportError {
+        netRecordError("\(realPath) transport: \(transportError)")
         return .failure("transport \(transportError)")
     }
     guard status == 200, let data = data,
           let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           (envelope["code"] as? Int ?? -1) == 0 else {
+        let snippet = data.flatMap { String(data: $0.prefix(160), encoding: .utf8) } ?? "-"
+        netRecordError("\(realPath) http=\(status) body=\(snippet)")
         return .failure("http=\(status) path=\(realPath)")
     }
     guard let plain = session.open(envelope["data"]) else {
+        netRecordError("\(realPath) v2 OPEN failed (mac/decrypt)")
         return .failure("v2 open failed path=\(realPath)")
     }
+    netRecordError("\(realPath) OK keys=\(plain.keys.count)")
     return .ok(plain)
 }
 
@@ -138,6 +155,11 @@ public func wqnet_ready() -> Int32 {
     guard !SecureBox.string(.pathConfig).isEmpty else { return -4 }
     guard !SecureBox.string(.v1Key).isEmpty else { return -5 }
     return 0
+}
+
+@_cdecl("wqnet_last_error")
+public func wqnet_last_error() -> UnsafeMutablePointer<CChar>? {
+    return netCString(netLastError)
 }
 
 @_cdecl("wqnet_describe")

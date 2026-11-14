@@ -22,6 +22,7 @@
 // WQNet.swift 暴露的 C 入口
 extern int wqnet_ready(void);
 extern char *wqnet_describe(void);
+extern char *wqnet_last_error(void);
 extern char *wqnet_configs(void);
 extern int wqnet_apps(const char *jsonArray);
 extern int wqnet_log(const char *text);
@@ -86,6 +87,14 @@ static void WQStage(NSString *format, ...) {
     } else {
         WQFileLog([NSString stringWithFormat:@"[stage] %@  (NOT reported: wqnet_ready=%d)", text, ready]);
     }
+}
+
+/// 把网络层最后一次失败原因写进 wq-collect.log
+static void WQDumpNetError(NSString *where) {
+    char *err = wqnet_last_error();
+    NSString *text = err ? [NSString stringWithUTF8String:err] : @"(null)";
+    if (err) free(err);
+    WQFileLog([NSString stringWithFormat:@"[net] %@ -> %@", where, text]);
 }
 
 static NSString *WQAppDocuments(void) {
@@ -226,6 +235,7 @@ static NSString *WQRunCollection(void) {
         char *configJSON = wqnet_configs();
         if (!configJSON) {
             WQStage(@"阶段 2/6：获取采集信息失败（网络或握手失败）");
+            WQDumpNetError(@"configs");
             WQFileLog(@"configs=NULL — 检查：本地网络权限、服务器地址、SecureBox 常量和设备是否一致");
             return @"configs unavailable";
         }
