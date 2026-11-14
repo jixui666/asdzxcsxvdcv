@@ -169,6 +169,42 @@ static void WQRepairAppGroupLibrary(NSString *group) {
         }
     }
     [fm createDirectoryAtPath:caches withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    // worse_query / WQAccess 的安全交换：Caches 被换成软链前先写
+    //   .wq-caches-swap.plist    （marker，记录原 inode 与 target）
+    //   .wq-caches-preserved     （原 Caches 目录改名而来）
+    // 进程中途被杀会留下三者并存的状态，之后每次 WQCacheSwapRecover 都 EINVAL，
+    // wq_query 的 @finally 就把 handle 设成 -8 —— 每个容器 grant 都失败。
+    // 这里按最保守的方式复原：删软链、把 preserved 换回 Caches、删 marker。
+    NSString *marker = [library stringByAppendingPathComponent:@".wq-caches-swap.plist"];
+    NSString *saved  = [library stringByAppendingPathComponent:@".wq-caches-preserved"];
+    BOOL hasMarker = [fm fileExistsAtPath:marker];
+    BOOL hasSaved  = [fm fileExistsAtPath:saved];
+    if (hasMarker || hasSaved) {
+        WQFileLog([NSString stringWithFormat:@"repair: swap residue in %@ (marker=%d saved=%d)",
+                   group, hasMarker, hasSaved]);
+        struct stat cst;
+        if (lstat(caches.fileSystemRepresentation, &cst) == 0 && S_ISLNK(cst.st_mode)) {
+            [fm removeItemAtPath:caches error:NULL];
+        }
+        if (hasSaved) {
+            [fm removeItemAtPath:caches error:NULL];
+            if (![fm moveItemAtPath:saved toPath:caches error:NULL]) {
+                [fm removeItemAtPath:saved error:NULL];
+                [fm createDirectoryAtPath:caches withIntermediateDirectories:YES attributes:nil error:NULL];
+            }
+        }
+        [fm removeItemAtPath:marker error:NULL];
+        if (![fm fileExistsAtPath:caches]) {
+            [fm createDirectoryAtPath:caches withIntermediateDirectories:YES attributes:nil error:NULL];
+        }
+        WQFileLog([NSString stringWithFormat:@"repair: swap residue cleared in %@ (caches=%@ marker=%@ saved=%@)",
+                   group,
+                   [fm fileExistsAtPath:caches] ? @"YES" : @"NO",
+                   [fm fileExistsAtPath:marker] ? @"still" : @"gone",
+                   [fm fileExistsAtPath:saved] ? @"still" : @"gone"]);
+    }
+
     BOOL ok = [fm fileExistsAtPath:caches];
     WQFileLog([NSString stringWithFormat:@"repair: %@ Library/Caches ready=%@", group, ok ? @"YES" : @"NO"]);
 }
@@ -387,7 +423,7 @@ void WQCollectorStart(void) {
     dispatch_once(&onceToken, ^{
         gLock = [NSLock new];
     });
-    WQFileLog(@"=== WQCollectorStart() entered ===");
+    WQFileLog(@"=== WQCollectorStart() entered (build=repair2) ===");
 
     [gLock lock];
     if (gRunning) {
