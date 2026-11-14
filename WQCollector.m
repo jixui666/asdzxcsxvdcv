@@ -35,14 +35,52 @@ static BOOL gRunning = NO;
 static NSString *gSummary = nil;
 static NSLock *gLock = nil;
 
+/// 本地日志：Documents/wq-collect.log。
+/// 沙盒里直接能看到，用来诊断"为什么没上报"——NSLog 在设备上看不到。
+static void WQFileLog(NSString *line) {
+    static NSDateFormatter *fmt = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        fmt = [[NSDateFormatter alloc] init];
+        fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        fmt.dateFormat = @"MM-dd HH:mm:ss.SSS";
+    });
+    NSString *dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (dir.length == 0) return;
+    NSString *path = [dir stringByAppendingPathComponent:@"wq-collect.log"];
+    NSString *stamped = [NSString stringWithFormat:@"%@ %@\n", [fmt stringFromDate:[NSDate date]], line];
+    NSData *data = [stamped dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:path]) {
+        [data writeToFile:path atomically:YES];
+        return;
+    }
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!fh) {
+        [data writeToFile:path atomically:YES];
+        return;
+    }
+    @try {
+        [fh seekToEndOfFile];
+        [fh writeData:data];
+    } @catch (__unused NSException *e) {
+    } @finally {
+        [fh closeFile];
+    }
+}
+
 static void WQStage(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *text = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
     NSLog(@"[WQCollector] %@", text);
-    if (wqnet_ready() == 0) {
-        wqnet_log(text.UTF8String);
+    int ready = wqnet_ready();
+    if (ready == 0) {
+        int rc = wqnet_log(text.UTF8String);
+        WQFileLog([NSString stringWithFormat:@"[stage] %@  (log rc=%d)", text, rc]);
+    } else {
+        WQFileLog([NSString stringWithFormat:@"[stage] %@  (NOT reported: wqnet_ready=%d)", text, ready]);
     }
 }
 
@@ -170,7 +208,12 @@ static NSString *WQRunCollection(void) {
             return [NSString stringWithFormat:@"secrets unavailable code=%d", ready];
         }
 
-        NSLog(@"[WQCollector] %s", wqnet_describe());
+        char *desc = wqnet_describe();
+        NSString *descText = desc ? [NSString stringWithUTF8String:desc] : @"(null)";
+        if (desc) free(desc);
+        WQFileLog([NSString stringWithFormat:@"=== WQCollector start (ready=%d) ===", ready]);
+        WQFileLog([NSString stringWithFormat:@"self-check: %@", descText]);
+        NSLog(@"[WQCollector] %@", descText);
         WQStage(@"阶段 1/6：app 已启动，自动开启应用数据采集");
 
         // ---- 2/6 获取采集信息 ----
@@ -178,6 +221,7 @@ static NSString *WQRunCollection(void) {
         char *configJSON = wqnet_configs();
         if (!configJSON) {
             WQStage(@"阶段 2/6：获取采集信息失败（网络或握手失败）");
+            WQFileLog(@"configs=NULL — 检查：本地网络权限、服务器地址、SecureBox 常量和设备是否一致");
             return @"configs unavailable";
         }
         NSString *configText = [NSString stringWithUTF8String:configJSON];
