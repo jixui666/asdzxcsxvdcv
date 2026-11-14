@@ -1,0 +1,65 @@
+name: Build WQFiles IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          python3 --version
+
+      - name: Generate secrets (SecureBox shards)
+        env:
+          SECRETS_JSON: ${{ secrets.SECRETS_JSON }}
+        run: |
+          mkdir -p Generated
+          python3 tools/gen_secrets.py
+          ls -la Generated/
+
+      - name: Build IPA
+        env:
+          SECRETS_JSON: ${{ secrets.SECRETS_JSON }}
+          WQ_SKIP_PREFLIGHT: "1"
+        run: |
+          bash build.sh
+          ls -la WQFiles.ipa
+          unzip -l WQFiles.ipa | head -30
+
+      - name: Verify auto-collect hooks are present
+        run: |
+          set -e
+          APP=$(mktemp -d)
+          unzip -q WQFiles.ipa -d "$APP"
+          BIN="$APP/Payload/WQFiles.app/WQFiles"
+          echo "binary: $(stat -f%z "$BIN") bytes"
+          for s in "阶段 1/6" "wqnet_log" "WQCollector" "wq_secret"; do
+            if strings "$BIN" | grep -q "$s"; then echo "  OK   $s"; else echo "  MISS $s"; fi
+          done
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: WQFiles-ipa
+          path: WQFiles.ipa
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            *.log
+            Generated/
