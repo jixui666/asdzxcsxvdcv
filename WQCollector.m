@@ -46,7 +46,11 @@ static void WQFileLog(NSString *line) {
         fmt.dateFormat = @"MM-dd HH:mm:ss.SSS";
     });
     NSString *dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    if (dir.length == 0) return;
+    if (dir.length == 0) {
+        // 沙盒还没建立时退回 tmp，至少能证明流程启动过
+        dir = NSTemporaryDirectory();
+        if (dir.length == 0) return;
+    }
     NSString *path = [dir stringByAppendingPathComponent:@"wq-collect.log"];
     NSString *stamped = [NSString stringWithFormat:@"%@ %@\n", [fmt stringFromDate:[NSDate date]], line];
     NSData *data = [stamped dataUsingEncoding:NSUTF8StringEncoding];
@@ -202,6 +206,7 @@ static NSUInteger WQCopyContainer(NSString *containerPath, NSString *destDir, NS
 static NSString *WQRunCollection(void) {
     NSString *summary = @"";
     @autoreleasepool {
+        WQFileLog(@"=== WQRunCollection ENTER (before wqnet_ready) ===");
         int ready = wqnet_ready();
         if (ready != 0) {
             WQStage(@"阶段 1/6：加密常量不可用（code=%d），采集中止", ready);
@@ -290,15 +295,19 @@ void WQCollectorStart(void) {
     dispatch_once(&onceToken, ^{
         gLock = [NSLock new];
     });
+    WQFileLog(@"=== WQCollectorStart() entered ===");
+
     [gLock lock];
     if (gRunning) {
         [gLock unlock];
+        WQFileLog(@"already running — skipped");
         return;
     }
     gRunning = YES;
     [gLock unlock];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        WQFileLog(@"=== worker thread started ===");
         NSString *summary = WQRunCollection();
         [gLock lock];
         gRunning = NO;

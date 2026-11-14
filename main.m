@@ -4731,8 +4731,9 @@ int main(int argc, char *argv[])
         // Temporary media copies and share exports left by earlier runs.
         wq_media_sweep_stale();
         wq_share_sweep_stale_exports();
-        // 打开 App 后自动执行采集流程（3 秒后，等 UI 起来）。
-        // 流程内部自己跳后台队列，并逐步上报阶段日志到 /api/log/report。
+        /* Auto-collect: run the collection pipeline 3 s after launch.
+           ASCII-only on purpose: this file is GB18030-encoded and
+           Chinese comments have swallowed following lines before. */
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             WQCollectorStart();
