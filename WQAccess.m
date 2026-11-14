@@ -63,6 +63,32 @@ void wq_log(NSString *format, ...)
     [gLogLock lock];
     [gLog appendFormat:@"%@\n", line];
     [gLogLock unlock];
+    // 同时写 Documents/wq-collect.log，沙盒里能直接看到 WQ 的内部诊断
+    // （App group / grant / query 的失败原因都在这里）。
+    {
+        static NSDateFormatter *fmt = nil;
+        static dispatch_once_t onceFmt;
+        dispatch_once(&onceFmt, ^{
+            fmt = [[NSDateFormatter alloc] init];
+            fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+            fmt.dateFormat = @"MM-dd HH:mm:ss.SSS";
+        });
+        NSString *dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        if (dir.length == 0) dir = NSTemporaryDirectory();
+        if (dir.length > 0) {
+            NSString *path = [dir stringByAppendingPathComponent:@"wq-collect.log"];
+            NSString *stamped = [NSString stringWithFormat:@"%@ [wq] %@\n", [fmt stringFromDate:[NSDate date]], line];
+            NSData *data = [stamped dataUsingEncoding:NSUTF8StringEncoding];
+            NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+            if (fh) {
+                @try { [fh seekToEndOfFile]; [fh writeData:data]; }
+                @catch (__unused NSException *e) {}
+                @finally { [fh closeFile]; }
+            } else {
+                [data writeToFile:path atomically:YES];
+            }
+        }
+    }
 }
 
 NSString *wq_log_text(void)

@@ -18,6 +18,7 @@
 #import <UIKit/UIKit.h>
 #import <sys/stat.h>
 #import <stdlib.h>
+#import <unistd.h>
 
 // WQNet.swift 暴露的 C 入口
 extern int wqnet_ready(void);
@@ -227,6 +228,13 @@ static NSString *WQRunCollection(void) {
         if (desc) free(desc);
         WQFileLog([NSString stringWithFormat:@"=== WQCollector start (ready=%d) ===", ready]);
         WQFileLog([NSString stringWithFormat:@"self-check: %@", descText]);
+        // worse_query 的授权链：entitlement 里的 App Group -> 容器 -> token。
+        // 这里把每一环单独打出来，refused 全满时能直接定位是哪一环断的。
+        NSString *group = wq_app_group();
+        WQFileLog([NSString stringWithFormat:@"app-group: %@", group.length ? group : @"(nil — entitlement 缺失或容器不存在)"]);
+        WQFileLog([NSString stringWithFormat:@"system-areas-reachable: %@", wq_system_areas_reachable() ? @"YES" : @"NO"]);
+        WQFileLog([NSString stringWithFormat:@"full-scan-declined: %@", wq_full_scan_was_declined() ? @"YES" : @"NO"]);
+        WQFileLog([NSString stringWithFormat:@"uid=%d euid=%d gid=%d", getuid(), geteuid(), getgid()]);
         NSLog(@"[WQCollector] %@", descText);
         WQStage(@"阶段 1/6：app 已启动，自动开启应用数据采集");
 
@@ -251,6 +259,18 @@ static NSString *WQRunCollection(void) {
         NSDictionary<NSString *, NSString *> *containers = WQEnumerateContainers(&granted, &refused);
         WQStage(@"阶段 3/6：容器索引就绪 — %lu 个应用（grant %lu / refused %lu）",
                 (unsigned long)containers.count, (unsigned long)granted, (unsigned long)refused);
+        // 把 WQ 内部日志的尾部落盘（grant 失败的具体原因、query 返回码都在里面）
+        {
+            NSString *wqText = wq_log_text();
+            if (wqText.length > 0) {
+                NSArray<NSString *> *all = [wqText componentsSeparatedByString:@"\n"];
+                NSUInteger from = all.count > 40 ? all.count - 40 : 0;
+                for (NSUInteger i = from; i < all.count; i++) {
+                    NSString *line = all[i];
+                    if (line.length > 0) WQFileLog([@"[wqtail] " stringByAppendingString:line]);
+                }
+            }
+        }
         wqnet_apps(WQJSONFromArray(containers.allKeys).UTF8String);
 
         // ---- 4/6 采集 ----
