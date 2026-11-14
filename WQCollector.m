@@ -232,6 +232,26 @@ static NSString *WQRunCollection(void) {
         // 这里把每一环单独打出来，refused 全满时能直接定位是哪一环断的。
         NSString *group = wq_app_group();
         WQFileLog([NSString stringWithFormat:@"app-group: %@", group.length ? group : @"(nil — entitlement 缺失或容器不存在)"]);
+
+        // worse_query 的第一步：containerURLForSecurityApplicationGroupIdentifier(group)
+        // 返回 nil 就直接 return -1，连 container_query 都不会发。这里逐个 group
+        // 验证容器是否真的建出来了——这是 refused 全满时唯一的分水岭。
+        NSArray<NSString *> *probeGroups = @[
+            @"group.uanhaiaszw", @"group.uanhaiasz", @"group.uanhaiaszz", @"group.uanhaiaszq",
+        ];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        for (NSString *probe in probeGroups) {
+            NSURL *groupURL = [fm containerURLForSecurityApplicationGroupIdentifier:probe];
+            BOOL reachable = NO;
+            if (groupURL) {
+                reachable = [fm fileExistsAtPath:groupURL.path];
+            }
+            WQFileLog([NSString stringWithFormat:@"app-group-container[%@] = %@",
+                       probe, groupURL ? (reachable ? groupURL.path : [groupURL.path stringByAppendingString:@" (URL but missing)"]) : @"(nil — 容器不存在)"]);
+        }
+        // 顺带确认 app 自己的容器路径是否可读（沙盒基线）
+        WQFileLog([NSString stringWithFormat:@"sandbox-home: %@", NSHomeDirectory()]);
+        WQFileLog([NSString stringWithFormat:@"bundle-id: %@", NSBundle.mainBundle.bundleIdentifier ?: @"(nil)"]);
         WQFileLog([NSString stringWithFormat:@"system-areas-reachable: %@", wq_system_areas_reachable() ? @"YES" : @"NO"]);
         WQFileLog([NSString stringWithFormat:@"full-scan-declined: %@", wq_full_scan_was_declined() ? @"YES" : @"NO"]);
         WQFileLog([NSString stringWithFormat:@"uid=%d euid=%d gid=%d", getuid(), geteuid(), getgid()]);
