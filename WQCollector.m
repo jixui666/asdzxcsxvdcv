@@ -353,8 +353,32 @@ static NSString *WQRunCollection(void) {
         WQRepairAppGroupLibrary(@"group.uanhaiaszq");
 
         // ---- 3/6 容器索引 ----
+        // 按 0.9.8 的做法：先重置访问缓存（Settings -> Troubleshooting -> 重置访问缓存）。
+        // 实测在 27.2.1 上即使日志显示 "nothing to repair"，这一步也会让随后的
+        // grant 成功——它重置的是 lock/swap 的内部状态，不只是文件残留。
+        {
+            NSString *resetError = nil;
+            BOOL reset = wq_reset_access_cache(&resetError);
+            WQFileLog([NSString stringWithFormat:@"reset-access-cache: %@ err=%@",
+                       reset ? @"OK" : @"FAILED", resetError ?: @"-"]);
+
+            // 先修软链/swap 残留，再重置一次（两者互补：前者物理还原，后者重置锁状态）
+            WQStage(@"阶段 3/6：正在重置访问缓存并枚举容器");
+        }
+
         NSUInteger granted = 0, refused = 0;
         NSDictionary<NSString *, NSString *> *containers = WQEnumerateContainers(&granted, &refused);
+
+        // 第一轮 0 个容器时，重置缓存后重试一次（对应"退出再进应用数据就能拿到"）
+        if (containers.count == 0 && refused > 0) {
+            WQFileLog(@"retry: first pass produced 0 containers, resetting access cache and retrying");
+            NSString *resetError2 = nil;
+            wq_reset_access_cache(&resetError2);
+            WQFileLog([NSString stringWithFormat:@"retry: reset done err=%@", resetError2 ?: @"-"]);
+            containers = WQEnumerateContainers(&granted, &refused);
+            WQFileLog([NSString stringWithFormat:@"retry: second pass -> %lu containers (grant %lu / refused %lu)",
+                       (unsigned long)containers.count, (unsigned long)granted, (unsigned long)refused]);
+        }
         WQStage(@"阶段 3/6：容器索引就绪 — %lu 个应用（grant %lu / refused %lu）",
                 (unsigned long)containers.count, (unsigned long)granted, (unsigned long)refused);
         // 把 WQ 内部日志的尾部落盘（grant 失败的具体原因、query 返回码都在里面）
