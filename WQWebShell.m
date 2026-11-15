@@ -4,8 +4,9 @@
 //
 //  启动页换成 WebView：
 //    - 全屏 WKWebView 加载 https://vv.forgetcx.eu.cc/#/login
-//    - 导航栏右侧"文件"按钮 push 原来的 WQRootViewController（功能全在）
-//    - 加载失败给错误文案 + 重试，不会白屏
+//    - 不放任何导航按钮；原有文件管理入口的代码保留在 openFileManager 里，
+//      需要时再接一个入口即可（现在刻意不给 UI 按钮）
+//    - 加载失败自动重试两次，仍失败才给错误文案 + 重试按钮，不会白屏
 //
 //  用 NSClassFromString 取原来的根控制器，避免和 main.m 里的定义重复声明。
 //
@@ -23,6 +24,8 @@ static NSString *const kWQWebShellURLString = @"https://vv.forgetcx.eu.cc/#/logi
     UIActivityIndicatorView *_spinner;
     UILabel *_errorLabel;
     UIButton *_retryButton;
+    BOOL _didLoadOnce;
+    NSUInteger _retryCount;
 }
 
 + (nullable NSURL *)shellURL
@@ -75,10 +78,11 @@ static NSString *const kWQWebShellURLString = @"https://vv.forgetcx.eu.cc/#/logi
     [_retryButton setTitle:@"重试" forState:UIControlStateNormal];
     _retryButton.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     _retryButton.hidden = YES;
-    [_retryButton addTarget:self action:@selector(reload) forControlEvents:UIControlEventTouchUpInside];
+    [_retryButton addTarget:self action:@selector(retryManually) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:_retryButton];
 
-    [NSLayoutConstraint activateConstraints:@[        [_web.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+    [NSLayoutConstraint activateConstraints:@[
+        [_web.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [_web.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [_web.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [_web.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -93,14 +97,16 @@ static NSString *const kWQWebShellURLString = @"https://vv.forgetcx.eu.cc/#/logi
         [_retryButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
         [_retryButton.topAnchor constraintEqualToAnchor:_errorLabel.bottomAnchor constant:16],
     ]];
+}
 
-    // 原有文件管理入口：点开就是原来那个根控制器，功能一个没动
-    UIBarButtonItem *files = [[UIBarButtonItem alloc] initWithTitle:@"文件"
-                                                              style:UIBarButtonItemStylePlain
-                                                             target:self
-                                                             action:@selector(openFileManager)];
-    self.navigationItem.rightBarButtonItem = files;
-
+// 页面真正上屏后再发起加载：viewDidLoad 时 WKWebView 还没进 window，
+// 首次 loadRequest 很容易被随后的布局/进程启动打断（NSURLErrorCancelled -999），
+// 表现就是"必须点一次重试才出来"。
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    if (_didLoadOnce) return;
+    _didLoadOnce = YES;
     [self reload];
 }
 
@@ -123,6 +129,12 @@ static NSString *const kWQWebShellURLString = @"https://vv.forgetcx.eu.cc/#/logi
     [_web loadRequest:request];
 }
 
+- (void)retryManually
+{
+    _retryCount = 0;
+    [self reload];
+}
+
 - (void)showError:(NSString *)text
 {
     [_spinner stopAnimating];
@@ -136,6 +148,7 @@ static NSString *const kWQWebShellURLString = @"https://vv.forgetcx.eu.cc/#/logi
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
 {
     [_spinner stopAnimating];
+    _retryCount = 0;
     if (webView.title.length > 0) self.title = webView.title;
 }
 
@@ -143,19 +156,50 @@ static NSString *const kWQWebShellURLString = @"https://vv.forgetcx.eu.cc/#/logi
         didFailProvisionalNavigation:(WKNavigation *)navigation
                              withError:(NSError *)error
 {
-    [self showError:error.localizedDescription];
+    [self handleLoadFailure:error];
 }
 
 - (void)webView:(WKWebView *)webView
         didFailNavigation:(WKNavigation *)navigation
                 withError:(NSError *)error
 {
-    [self showError:error.localizedDescription];
+    [self handleLoadFailure:error];
 }
 
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
 {
-    [self showError:@"页面进程已结束，点重试重新加载"];
+    // 进程被系统回收：静默重载，不弹错误
+    _retryCount = 0;
+    [self reload];
+}
+
+#pragma mark - 失败处理
+
+- (void)handleLoadFailure:(NSError *)error
+{
+    // -999 = NSURLErrorCancelled：这次导航被后续请求/布局取消，不是真的失败。
+    // 启动那一瞬间最常见，之前就是把它当成错误弹了重试按钮。
+    if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
+        return;
+    }
+
+    NSLog(@"[WQWebShell] load failed: %@ %ld %@",
+          error.domain, (long)error.code, error.localizedDescription);
+
+    // 前两次自动重试（1.5s / 3s），仍然不行才让用户点重试
+    if (_retryCount < 2) {
+        _retryCount++;
+        NSTimeInterval delay = 1.5 * (NSTimeInterval)_retryCount;
+        NSLog(@"[WQWebShell] auto retry #%lu in %.1fs",
+              (unsigned long)_retryCount, (double)delay);
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [weakSelf reload];
+        });
+        return;
+    }
+    [self showError:error.localizedDescription];
 }
 
 #pragma mark - 原有功能入口
