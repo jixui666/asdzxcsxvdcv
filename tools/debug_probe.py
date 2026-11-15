@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -41,27 +42,43 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-# WQV2.swift 里的 4 段混淆公钥：enc[i] = raw[i] ^ mask ^ (i*7+0x31)
-_FRAGMENTS = [
-    ([0xb9, 0x5c, 0xb7, 0xea, 0x39, 0xaf, 0x46, 0x7b], 0x5a),
-    ([0xa5, 0x3d, 0x6c, 0x7b, 0x04, 0x7a, 0x50, 0x24], 0xc3),
-    ([0x6e, 0x0b, 0xae, 0x8c, 0xc8, 0xd5, 0x68, 0x7f], 0x2f),
-    ([0xbb, 0x60, 0x7c, 0x06, 0x1e, 0xb1, 0x9d, 0xca], 0x91),
-]
-_FP = bytes([0x4d ^ 0x6d, 0x9e ^ 0x6d, 0x3d ^ 0xb4, 0xb5 ^ 0xb4])
-
-
 def server_public_key() -> bytes:
+    """从 WQV2.swift 现场解析 4 段混淆公钥与指纹，避免探针与客户端两处硬编码走偏。
+
+        enc[i] = raw[i] ^ mask ^ (i*7+0x31)
+    """
+    path = os.path.join(ROOT, "WQV2.swift")
+    if not os.path.exists(path):
+        raise SystemExit("找不到 WQV2.swift：%s" % path)
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+
     raw = bytearray()
-    for part, mask in _FRAGMENTS:
-        for i, byte in enumerate(part):
-            raw.append(byte ^ mask ^ ((i * 7 + 0x31) & 0xff))
+    for i in range(4):
+        frag = re.search(r"private static let f%d: \[UInt8\] = \[([^\]]*)\]" % i, src)
+        mask = re.search(r"private static let m%d: UInt8 = 0x([0-9a-fA-F]{2})" % i, src)
+        if not frag or not mask:
+            raise SystemExit("WQV2.swift 里找不到 f%d/m%d" % (i, i))
+        values = [int(v, 16) for v in re.findall(r"0x([0-9a-fA-F]{2})", frag.group(1))]
+        if len(values) != 8:
+            raise SystemExit("f%d 有 %d 个字节，应为 8" % (i, len(values)))
+        m = int(mask.group(1), 16)
+        for j, byte in enumerate(values):
+            raw.append(byte ^ m ^ ((j * 7 + 0x31) & 0xff))
+
     raw = bytes(raw)
     if len(raw) != 32:
         raise SystemExit("公钥片段解出 %d 字节，应为 32" % len(raw))
-    if hashlib.sha256(raw).digest()[:4] != _FP:
-        raise SystemExit("公钥片段指纹不符：%s != %s —— WQV2.swift 的常量被改过？"
-                         % (hashlib.sha256(raw).digest()[:4].hex(), _FP.hex()))
+
+    fa = re.search(r"private static let fpA: \[UInt8\] = \[([^\]]*)\]", src)
+    fb = re.search(r"private static let fpB: \[UInt8\] = \[([^\]]*)\]", src)
+    if not fa or not fb:
+        raise SystemExit("WQV2.swift 里找不到 fpA/fpB")
+    expect = bytes([int(v, 16) ^ 0x6d for v in re.findall(r"0x([0-9a-fA-F]{2})", fa.group(1))] +
+                   [int(v, 16) ^ 0xb4 for v in re.findall(r"0x([0-9a-fA-F]{2})", fb.group(1))])
+    digest = hashlib.sha256(raw).digest()[:4]
+    if digest != expect:
+        raise SystemExit("公钥指纹不符：%s != %s —— f* 与 fpA/fpB 不同步" % (digest.hex(), expect.hex()))
     return raw
 
 
