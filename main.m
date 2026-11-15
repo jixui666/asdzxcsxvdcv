@@ -36,6 +36,7 @@
 #import <AVKit/AVKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
+#import <stdlib.h>
 #import <sys/mount.h>
 
 static BOOL wq_looks_like_uuid(NSString *name)
@@ -4733,6 +4734,32 @@ extern void wq_legacy_trace_start(void);
 extern int wq_integrity_install(void);
 extern char *wq_integrity_issues(void);
 
+// 完整性校验结果落盘：IntegrityGuard 只走 NSLog（设备 Console），沙盒里看不到。
+// 这里再写一份 Documents/wq-integrity.log，用文件管理器就能直接确认过没过。
+static void wq_integrity_note(NSString *text)
+{
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (docs.length == 0) return;
+    NSString *path = [docs stringByAppendingPathComponent:@"wq-integrity.log"];
+    NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+    fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    fmt.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n",
+                      [fmt stringFromDate:[NSDate date]], text ?: @"(null)"];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (handle) {
+        @try {
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+        } @finally {
+            [handle closeFile];
+        }
+    } else {
+        [data writeToFile:path atomically:YES];
+    }
+}
+
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
@@ -4740,13 +4767,16 @@ int main(int argc, char *argv[])
         // 不退出；严格模式下失败会直接 _exit(0)。
         {
             int issues = wq_integrity_install();
+            char *raw = wq_integrity_issues();
+            NSString *text = raw ? @(raw) : @"";
             if (issues > 0) {
-                char *text = wq_integrity_issues();
-                NSLog(@"[integrity] %d issue(s): %s", issues, text ? text : "?");
-                if (text) free(text);
+                NSLog(@"[integrity] %d issue(s): %@", issues, text);
+                wq_integrity_note([NSString stringWithFormat:@"FAIL(%d): %@", issues, text]);
             } else {
                 NSLog(@"[integrity] OK");
+                wq_integrity_note(@"OK");
             }
+            if (raw) free(raw);
         }
         // WQWebShell 用 NSClassFromString 取原根控制器；这里显式引用一次，
         // 免得链接期把它当成未使用代码裁掉。
