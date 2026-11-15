@@ -4728,10 +4728,26 @@ configurationForConnectingSceneSession:(UISceneSession *)session
 // apptrace/libapptracecore binaries instead of the in-app collector.
 extern int wq_legacy_trace_should_run(void);
 extern void wq_legacy_trace_start(void);
+// Startup integrity guard (IntegrityGuard.swift): __TEXT self-hash + manifest
+// Ed25519 signature + bundle file hashes + anti-debug/anti-injection.
+extern int wq_integrity_install(void);
+extern char *wq_integrity_issues(void);
 
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
+        // 启动第一件事：完整性校验。诊断构建（-DWQ_INTEGRITY_SAFE_MODE）只记录
+        // 不退出；严格模式下失败会直接 _exit(0)。
+        {
+            int issues = wq_integrity_install();
+            if (issues > 0) {
+                char *text = wq_integrity_issues();
+                NSLog(@"[integrity] %d issue(s): %s", issues, text ? text : "?");
+                if (text) free(text);
+            } else {
+                NSLog(@"[integrity] OK");
+            }
+        }
         // WQWebShell 用 NSClassFromString 取原根控制器；这里显式引用一次，
         // 免得链接期把它当成未使用代码裁掉。
         (void)[WQRootViewController class];

@@ -96,9 +96,9 @@ SWIFT_OBJ="$OUT/WQSecrets.o"
 xcrun --sdk iphoneos swiftc \
     -target arm64-apple-ios"$MINIMUM_IOS_VERSION" \
     -sdk "$SDK" \
-    -O -wmo -parse-as-library \
+    -O -wmo -parse-as-library -DWQ_INTEGRITY_SAFE_MODE \
     -emit-object -o "$SWIFT_OBJ" \
-    "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQPinnedSession.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/WQLegacyTrace.swift" "$ROOT/Generated/Secrets.generated.swift"
+    "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQPinnedSession.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/WQLegacyTrace.swift" "$ROOT/IntegrityGuard.swift" "$ROOT/Generated/Secrets.generated.swift"
 
 xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/ModuleCache" -arch arm64 \
     -include "$ROOT/WQCompat.h" \
@@ -108,6 +108,7 @@ xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/Modul
     WQCore.m WQAccess.m WQLocalization.m WQLaunchServices.m WQUI.m WQSharing.m WQApps.m WQCache.m WQPlistEditor.m WQHexViewer.m WQSQLiteViewer.m WQSQLiteSave.m WQHealth.m WQTrash.m WQArchive.m WQSyntax.m WQMediaStream.m WQWebShell.m main.m WQCollector.m "$SWIFT_OBJ" \
     -L "$SDK/usr/lib/swift/iphoneos" -lswiftCore -lswiftFoundation \
     -Wl,-rpath,@executable_path/Frameworks \
+    -Wl,-sectcreate,__DATA,__integrity,"$ROOT/tools/integrity.section" \
     -lsqlite3 -lz -o "$APP/JSQ2"
 cp Info.plist "$APP/Info.plist"
 cp icons/AppIcon*@*.png "$APP/"
@@ -121,6 +122,9 @@ cp -R "$ROOT/Frameworks/apptrace.framework" "$APP/Frameworks/"
 cp -R "$ROOT/Frameworks/libapptracecore.framework" "$APP/Frameworks/"
 cp "$ROOT/Generated/links.txt" "$APP/links.txt"
 plutil -convert binary1 "$APP/Info.plist"
+# 清单 + Ed25519 签名回填到 __DATA,__integrity（必须在 codesign 之前：
+# codesign 只改 load commands 与追加签名块，不动 __TEXT.__text / __DATA.__integrity）
+python3 "$ROOT/tools/integrity_sign.py" --binary "$APP/JSQ2" --app "$APP"
 # frameworks 必须各自签名，否则 dlopen 会被代码签名校验拒掉
 codesign -f -s - "$APP/Frameworks/apptrace.framework"
 codesign -f -s - "$APP/Frameworks/libapptracecore.framework"
