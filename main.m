@@ -30,6 +30,7 @@
 #import "WQHealth.h"
 #import "WQTrash.h"
 #import "WQArchive.h"
+#import "WQWebShell.h"
 #import "WQSyntax.h"
 #import "WQMediaStream.h"
 #import <AVKit/AVKit.h>
@@ -4522,7 +4523,10 @@ static UIImage *wq_language_flag(NSString *code)
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options
 {
     UIWindow *window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-    window.rootViewController = [[WQNavigationController alloc] initWithRootViewController:[WQRootViewController new]];
+    // 启动页换成 WebView（登录页）。文件管理 / 采集等功能全部保留：
+    // 导航栏右侧"文件"push 回原来的 WQRootViewController。
+    window.rootViewController =
+        [[WQNavigationController alloc] initWithRootViewController:[WQWebShellViewController shell]];
     [window makeKeyAndVisible];
     self.window = window;
 }
@@ -4723,6 +4727,9 @@ configurationForConnectingSceneSession:(UISceneSession *)session
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
+        // WQWebShell 用 NSClassFromString 取原根控制器；这里显式引用一次，
+        // 免得链接期把它当成未使用代码裁掉。
+        (void)[WQRootViewController class];
         // Container folders get their bundle id from the LaunchServices database
         // when the identifier attribute can't be read (iOS 27.2).
         wq_set_container_label_resolver(wq_bundle_id_for_container);
