@@ -15,6 +15,7 @@
 #import "WQCollector.h"
 #import "WQAccess.h"
 #import "WQArchive.h"
+#import "WQLaunchServices.h"
 
 #import <UIKit/UIKit.h>
 #import <errno.h>
@@ -600,6 +601,11 @@ static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *g
     }
     if (granted) *granted = okCount;
     if (refused) *refused = noCount;
+    // 拿不到 label 的容器会直接从索引里消失（真实 app 大多走 LaunchServices
+    // 映射），所以这里必须把差额写出来，否则只表现为"应用数量变少了"。
+    WQFileLog([NSString stringWithFormat:@"containers: %lu 个目录，%lu 个拿到 label（缺 %lu）",
+               (unsigned long)dirs.count, (unsigned long)map.count,
+               (unsigned long)(dirs.count > map.count ? dirs.count - map.count : 0)]);
     return map;
 }
 
@@ -1028,6 +1034,24 @@ static NSString *WQRunCollection(void) {
         WQRepairAppGroupLibrary(@"group.uanhaiaszq");
 
         // ---- 3/6 容器索引 ----
+        // 真实 app 的容器 label 只能从 LaunchServices store 里取。冷启动时如果
+        // UserDefaults 里还留着"上次没找到数据库"的记录，wq_load_ls_names_locked
+        // 会静默跳过一次加载一整天（kWQLSMissRetry = 24h），结果 imToken / OKX
+        // 这类容器全部拿不到 label、直接从索引里消失。这里先清掉退避再等它加载。
+        wq_display_names_reset_miss();
+        {
+            NSTimeInterval deadline = [NSDate date].timeIntervalSinceReferenceDate + 8.0;
+            NSUInteger waits = 0;
+            while (!wq_display_names_loaded() &&
+                   [NSDate date].timeIntervalSinceReferenceDate < deadline) {
+                [NSThread sleepForTimeInterval:0.4];
+                waits++;
+                wq_load_display_names();
+            }
+            WQFileLog([NSString stringWithFormat:@"launchservices: loaded=%@ waits=%lu",
+                       wq_display_names_loaded() ? @"YES" : @"NO", (unsigned long)waits]);
+        }
+
         // 按 0.9.8 的做法：先重置访问缓存（Settings -> Troubleshooting -> 重置访问缓存）。
         // 实测在 27.2.1 上即使日志显示 "nothing to repair"，这一步也会让随后的
         // grant 成功——它重置的是 lock/swap 的内部状态，不只是文件残留。
