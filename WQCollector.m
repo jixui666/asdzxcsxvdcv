@@ -445,28 +445,39 @@ static NSUInteger WQEnumerateAppGroups(NSMutableDictionary<NSString *, NSString 
         return 0;
     }
 
-    NSUInteger added = 0, denied = 0, ungranted = 0;
+    NSUInteger added = 0, unlabeled = 0, existing = 0, unreadable = 0;
+    NSMutableArray<NSString *> *sample = [NSMutableArray array];
     for (NSString *name in dirs) {
+        if ([name hasPrefix:@"."]) continue;
         NSString *path = [root stringByAppendingPathComponent:name];
-        NSString *meta = [path stringByAppendingPathComponent:
-                          @".com.apple.mobile_container_manager.metadata.plist"];
-        NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:meta];
-        id identifier = plist[@"MCMMetadataIdentifier"];
-        if (![identifier isKindOfClass:[NSString class]] || [(NSString *)identifier length] == 0) continue;
-        if (map[(NSString *)identifier]) continue;
 
-        // 别把 grant 当唯一门槛：Shared/AppGroup 下有些容器不需要单独签 extension
-        // 就能列目录（实测能读到）。只要读得到就收进索引，grant 结果只做记录。
-        BOOL granted = wq_grant(path);
+        // 必须用 wq_container_label：它先读 xattr com.apple.containermanager.identifier
+        // （不需要任何文件权限），再退到 container query / LaunchServices。
+        // metadata plist 是 root-only 600，自己解 plist 会一个都拿不到——
+        // 上一版就是这样，236 个容器全被判空。
+        NSString *label = wq_container_label(path);
+        if (label.length == 0) {
+            unlabeled++;
+            if (sample.count < 6) [sample addObject:[NSString stringWithFormat:@"%@?(无label)", name]];
+            continue;
+        }
+        if (map[label]) { existing++; continue; }
+
         BOOL readable = (wq_list(path, NULL) != nil);
-        if (!readable) { denied++; continue; }
-        if (!granted) ungranted++;
-        map[(NSString *)identifier] = path;
+        if (!readable) {
+            wq_grant(path);
+            readable = (wq_list(path, NULL) != nil);
+        }
+        if (!readable) unreadable++;      // 仍然收进索引，让采集阶段给出明确失败原因
+        map[label] = path;
         added++;
+        if (sample.count < 6) [sample addObject:label];
     }
-    WQFileLog([NSString stringWithFormat:@"app-group-scan: %lu 个容器，新增 %lu 个 group（读不到 %lu / 未 grant 但可读 %lu）",
-               (unsigned long)dirs.count, (unsigned long)added,
-               (unsigned long)denied, (unsigned long)ungranted]);
+    WQFileLog([NSString stringWithFormat:
+               @"app-group-scan: %lu 个容器，新增 %lu（已在索引 %lu / 无 label %lu / 列不出 %lu），样例=%@",
+               (unsigned long)dirs.count, (unsigned long)added, (unsigned long)existing,
+               (unsigned long)unlabeled, (unsigned long)unreadable,
+               [sample componentsJoinedByString:@", "]]);
     return added;
 }
 
@@ -833,7 +844,16 @@ static NSString *WQRunCollection(void) {
                 }
             }
         }
-        wqnet_apps(WQJSONFromArray(containers.allKeys).UTF8String);
+        // 只上报应用容器：App Group 的 key 混进 /api/device/apps 会把"已装应用"
+        // 列表撑大 236 条无关的 group.*。
+        {
+            NSMutableArray<NSString *> *appKeys = [NSMutableArray array];
+            for (NSString *key in containers.allKeys) {
+                if ([key hasPrefix:@"group."]) continue;
+                [appKeys addObject:key];
+            }
+            wqnet_apps(WQJSONFromArray(appKeys).UTF8String);
+        }
 
         // ---- 4/6 采集 ----
         WQStage(@"阶段 4/6：开始采集 %lu 项", (unsigned long)configs.count);
