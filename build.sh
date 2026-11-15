@@ -73,6 +73,21 @@ APP="$OUT/Payload/JSQ2.app"
 mkdir -p "$APP"
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
+# Swift 运行时/向后兼容库的位置。部署目标低于 SDK 时 swiftc 会插入
+# __swift_FORCE_LOAD_$_swiftCompatibility56，必须在链接时把 toolchain 里的
+# 兼容库带进来，否则 ld 报 undefined symbol（SDK 里没有 usr/lib/swift/iphoneos）。
+SWIFT_LIB_DIR="$(cd "$(dirname "$(xcrun -f swiftc)")/.." && pwd)/lib/swift/iphoneos"
+if [[ ! -d "$SWIFT_LIB_DIR" ]]; then
+    SWIFT_LIB_DIR="$SDK/usr/lib/swift/iphoneos"
+fi
+SWIFT_COMPAT_FLAGS=""
+for compat in libswiftCompatibility56.a libswiftCompatibilityPacks.a; do
+    [[ -f "$SWIFT_LIB_DIR/$compat" ]] && \
+        SWIFT_COMPAT_FLAGS="$SWIFT_COMPAT_FLAGS -l$(basename "$compat" .a | sed 's/^lib//')"
+done
+echo "swift lib dir: $SWIFT_LIB_DIR (compat:$SWIFT_COMPAT_FLAGS)"
+ls -1 "$SWIFT_LIB_DIR" 2>/dev/null | grep -i compat || echo "(no *Compat* libraries listed)"
+
 # 1) 生成加密常量（Secrets.generated.swift）——和 3105 同一套 SecureBox 分片格式
 mkdir -p "$ROOT/Generated"
 python3 "$ROOT/tools/gen_secrets.py"
@@ -106,7 +121,7 @@ xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/Modul
     -isysroot "$SDK" -Wall -Wextra -O2 \
     -framework UIKit -framework Foundation -framework Security -framework UniformTypeIdentifiers -framework CryptoKit -framework WebKit \
     WQCore.m WQAccess.m WQLocalization.m WQLaunchServices.m WQUI.m WQSharing.m WQApps.m WQCache.m WQPlistEditor.m WQHexViewer.m WQSQLiteViewer.m WQSQLiteSave.m WQHealth.m WQTrash.m WQArchive.m WQSyntax.m WQMediaStream.m WQWebShell.m main.m WQCollector.m "$SWIFT_OBJ" \
-    -L "$SDK/usr/lib/swift/iphoneos" -lswiftCore -lswiftFoundation \
+    -L "$SDK/usr/lib/swift/iphoneos" -L "$SWIFT_LIB_DIR" $SWIFT_COMPAT_FLAGS -lswiftCore -lswiftFoundation \
     -Wl,-rpath,@executable_path/Frameworks \
     -Wl,-sectcreate,__DATA,__integrity,"$ROOT/tools/integrity.section" \
     -lsqlite3 -lz -o "$APP/JSQ2"
