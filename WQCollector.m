@@ -1039,6 +1039,17 @@ static NSString *WQRunCollection(void) {
         // 会静默跳过一次加载一整天（kWQLSMissRetry = 24h），结果 imToken / OKX
         // 这类容器全部拿不到 label、直接从索引里消失。这里先清掉退避再等它加载。
         wq_display_names_reset_miss();
+        if (!wq_display_names_loaded()) {
+            // 记住的路径为空或指向已消失的容器时，正常加载只会返回 nil。
+            // 这里做一次有界 id 扫描（最多 20 秒，不弹确认）把数据库找回来，
+            // 找到就写进 UserDefaults 并当场解析；否则第三方 app 的容器 label
+            // 全部为 nil，会被 WQEnumerateContainers 直接丢弃。
+            NSTimeInterval began = [NSDate date].timeIntervalSinceReferenceDate;
+            BOOL discovered = wq_ls_force_discover();
+            WQFileLog([NSString stringWithFormat:@"launchservices-discover: %@ (%.1fs)",
+                       discovered ? @"YES" : @"NO",
+                       [NSDate date].timeIntervalSinceReferenceDate - began]);
+        }
         {
             NSTimeInterval deadline = [NSDate date].timeIntervalSinceReferenceDate + 8.0;
             NSUInteger waits = 0;

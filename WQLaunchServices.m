@@ -1282,6 +1282,26 @@ void wq_display_names_reset_miss(void)
     }
 }
 
+BOOL wq_ls_force_discover(void)
+{
+    @synchronized (wq_ls_lock()) {
+        if (gLSLoaded) return YES;
+        // 非测试构建里 wq_find_ls_store 只查记住的路径；冷启动时它可能是空的
+        // 或指向已消失的容器，这时只能做一次有界 id 扫描把它找回来。
+        NSString *store = wq_ls_discover_store();
+        if (store.length == 0) {
+            wq_log(@"names: discovery found no LaunchServices database");
+            return NO;
+        }
+        wq_log(@"names: discovery found %@", store.lastPathComponent ?: @"(store)");
+        [NSUserDefaults.standardUserDefaults setObject:store forKey:kWQLSStoreKey];
+        gLSNextRetryAt = 0;
+        gLSFailureCount = 0;
+        wq_load_ls_names_locked();
+        return gLSLoaded;
+    }
+}
+
 static NSString *const kWQBundleContainerRoot = @"/private/var/containers/Bundle/Application/";
 
 // App bundle containers (<root>/<UUID>, holding Name.app) -> bundle id, built

@@ -2482,6 +2482,28 @@ static NSString *wq_scan_for_ls_store(fsid_t fsid, int64_t maxInode, qos_class_t
     return found;
 }
 
+// Synchronous discovery hook for the collector: bounded id scan for
+// com.apple.LaunchServices-*.csstore (20 s cap), no UI prompt, touches no
+// UserDefaults miss record. In non-WQ_LS_TESTING builds wq_find_ls_store only
+// looks at the remembered path, so a cold start with an empty UserDefaults
+// never finds the database unless something else runs the shared scan first.
+NSString *wq_ls_discover_store(void)
+{
+    struct statfs sfs;
+    if (statfs("/private/var/mobile", &sfs) != 0) {
+        wq_log(@"ls-discover: statfs failed (%@)", wq_errno(errno));
+        return nil;
+    }
+    fsid_t fsid = sfs.f_fsid;
+    int64_t probeInode = 0;
+    int64_t maxInode = wq_volume_max_inode(fsid, &probeInode);
+    if (maxInode <= 0) {
+        wq_log(@"ls-discover: max inode unavailable");
+        return nil;
+    }
+    return wq_scan_for_ls_store(fsid, maxInode, QOS_CLASS_UTILITY, nil);
+}
+
 // When the container manager lists the containers, the database search in
 // wq_containers_from_ls_store doesn't run, yet the name loader only reads a
 // remembered database: look for it in the background (the same bounded id

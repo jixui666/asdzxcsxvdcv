@@ -184,6 +184,11 @@ void wq_enumerate_invalidate(void);
 // NO on iOS 26: there worse_query can't reach System Data, the system groups
 // or the App Groups parent folder (only the individual containers).
 BOOL wq_system_areas_reachable(void);
+// Bounded id scan for the LaunchServices database (com.apple.LaunchServices-
+// *.csstore), capped at 20 s. No UI prompt and no UserDefaults bookkeeping:
+// for callers that need the database found right now (the collector), since
+// the name loader itself only reads a remembered path. Nil when not found.
+NSString *_Nullable wq_ls_discover_store(void);
 NSArray<NSString *> *_Nullable wq_enumerate(NSString *dir, int64_t maxInode,
                                             WQScanCancellation *_Nullable cancellation,
                                             void (^_Nullable progress)(int64_t done, int64_t total, NSUInteger found));

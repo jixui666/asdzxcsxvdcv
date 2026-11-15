@@ -24,6 +24,11 @@ void wq_load_display_names(void);
 // After a user's refresh: search for a database that wasn't found before
 // right away instead of waiting a day.
 void wq_display_names_reset_miss(void);
+// Find and load the database right now: a bounded (20 s) id scan for
+// com.apple.LaunchServices-*.csstore, no UI prompt. Needed when nothing else
+// runs the shared scan first (cold start straight into a web view), because
+// the normal loader only reads the remembered path. YES when loaded.
+BOOL wq_ls_force_discover(void);
 // Every app and extension data container the LaunchServices database lists,
 // read from storeHint (remembered when it parses) or the remembered location.
 // Never scans. Nil when there's no usable database.
