@@ -52,14 +52,6 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<!-- 调试构建：服务端是局域网 http://192.168.1.6:8001，默认 ATS 会拦掉明文 http
-	     （NSURLErrorAppTransportSecurityRequiresSecureConnection / -1022）。
-	     接回 https 正式服务端时删掉这一段。 -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
 	<key>MinimumOSVersion</key>
 	<string>15.0</string>
 	<key>UIApplicationSceneManifest</key>
