@@ -37,6 +37,13 @@ NS_ASSUME_NONNULL_BEGIN
 // .com.apple.mobile_container_manager.metadata.plist, which isn't worth a prompt.
 @property (nonatomic, copy, nullable) NSSet<NSString *> *expectedUnreadableNames;
 @property (nonatomic) NSUInteger expectedUnreadable;
+// Writing: maps an entry name (relative path, no trailing slash) before it is
+// stored, nil leaves names untouched. Cross-platform packaging needs it --
+// NTFS refuses : * ? " < > | and trailing dots/spaces, while iOS container
+// names are free to contain them (Telegram keeps
+// accounts-metadata/spotlight/p:NNNNNNN), so a server unpacking on Windows
+// fails with EINVAL instead of reading the archive.
+@property (nonatomic, copy, nullable) NSString *_Nullable (^sanitizeEntryName)(NSString *name);
 @end
 
 // Plain POSIX calls; for local files and tests.

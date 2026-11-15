@@ -235,6 +235,10 @@ static BOOL wq_zip_add(WQZipWriter *w, NSString *path, NSString *name, NSUIntege
 {
     if (w->cancelled && w->cancelled()) return wq_zip_fail(w, @"Cancelled");
     if (depth > 64) return wq_zip_fail(w, WQLocalized(@"Folders are nested too deeply"));
+    if (w->io.sanitizeEntryName) {
+        NSString *mapped = w->io.sanitizeEntryName(name);
+        if (mapped.length) name = mapped;
+    }
     struct stat st;
     if (!w->io.stat(path, &st)) return wq_zip_fail(w, WQLocalizedFormat(@"Can't read %@ (%s)", name, strerror(errno)));
     if (S_ISREG(st.st_mode)) return wq_zip_add_file(w, path, name, &st);

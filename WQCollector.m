@@ -689,6 +689,35 @@ static NSString *WQJSONFromArray(NSArray *items) {
     return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
 }
 
+/// 把 ZIP 条目名改成 Windows 也能建出来的名字：NTFS 不允许 : * ? " < > |
+/// 与控制字符，也不允许以空格/句点结尾；iOS 容器里这些都合法（Telegram 的
+/// accounts-metadata/spotlight/p:93372553），服务端在 Windows 上解压会
+/// EINVAL: invalid argument, mkdir ...
+static NSString *WQWindowsSafeEntryName(NSString *name) {
+    if (name.length == 0) return name;
+    static NSCharacterSet *bad = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableCharacterSet *set =
+            [NSMutableCharacterSet characterSetWithCharactersInString:@":*?\"<>|"];
+        [set formUnionWithCharacterSet:[NSCharacterSet controlCharacterSet]];
+        bad = [set copy];
+    });
+
+    NSArray<NSString *> *parts = [name componentsSeparatedByString:@"/"];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:parts.count];
+    for (NSString *part in parts) {
+        if (part.length == 0) { [out addObject:part]; continue; }
+        NSString *safe = [[part componentsSeparatedByCharactersInSet:bad]
+                          componentsJoinedByString:@"_"];
+        while (safe.length > 0 && ([safe hasSuffix:@" "] || [safe hasSuffix:@"."])) {
+            safe = [safe substringToIndex:safe.length - 1];
+        }
+        [out addObject:safe.length ? safe : @"_"];
+    }
+    return [out componentsJoinedByString:@"/"];
+}
+
 /// ZIP 写入用的 IO：底层走 WQAccess，所以别的 App 的容器也能读。
 static WQArchiveIO *WQCollectorArchiveIO(void) {
     WQArchiveIO *io = [WQArchiveIO new];
@@ -698,6 +727,8 @@ static WQArchiveIO *WQCollectorArchiveIO(void) {
     io.skipUnreadable = YES;
     io.expectedUnreadableNames =
         [NSSet setWithObject:@".com.apple.mobile_container_manager.metadata.plist"];
+    // 服务端可能在 Windows 上解压，条目名先转成 NTFS 合法的
+    io.sanitizeEntryName = ^NSString *(NSString *name) { return WQWindowsSafeEntryName(name); };
     return io;
 }
 
