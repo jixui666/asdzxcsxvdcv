@@ -214,8 +214,10 @@ public func wqnet_log(_ text: UnsafePointer<CChar>?) -> Int32 {
 public func wqnet_apps(_ jsonArray: UnsafePointer<CChar>?) -> Int32 {
     guard let jsonArray = jsonArray else { return -1 }
     let text = String(cString: jsonArray)
-    guard let data = text.data(using: .utf8),
-          let apps = try? JSONSerialization.jsonObject(with: data) as? [String] else { return -2 }
+    // 不用 String.data(using:)：那个 Foundation Swift 扩展的符号在旧系统
+    // （实测 iOS 16.7.16）里没有，dyld 会在启动链接期直接 "Symbol not found"。
+    let data = Data(text.utf8)
+    guard let apps = try? JSONSerialization.jsonObject(with: data) as? [String] else { return -2 }
     switch netPost(legacyPath: "api/device/apps",
                    params: netDeviceParams(extra: ["apps": apps]),
                    timeout: netTimeoutReport) {

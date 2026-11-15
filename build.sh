@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$ROOT"
-MINIMUM_IOS_VERSION=26.0
+MINIMUM_IOS_VERSION=15.0
 FINAL_IPA=${WQFILES_FINAL_IPA:-WQFiles.ipa}
 
 # Publish only after the host regression suite passes. The packaged artifact

@@ -65,7 +65,8 @@ final class WQPinnedSession {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "MM-dd HH:mm:ss.SSS"
         let line = "\(formatter.string(from: Date())) [pin] \(text)\n"
-        guard let data = line.data(using: .utf8) else { return }
+        // 同 WQNet：避开 String.data(using:)，旧系统没有那个符号。
+        let data = Data(line.utf8)
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
             handle.write(data)
