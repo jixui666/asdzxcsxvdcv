@@ -127,11 +127,8 @@ xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/Modul
     -lsqlite3 -lz -o "$APP/JSQ2"
 cp Info.plist "$APP/Info.plist"
 cp icons/AppIcon*@*.png "$APP/"
-# 只带简体中文：Localizable.strings 的 key 就是英文原文，缺 en.lproj 时
-# NSLocalizedString 直接返回 key，效果与带 en.lproj 完全一样（省一份冗余）。
-for lang in zh-Hans; do
-    [[ -d "$ROOT/$lang.lproj" ]] && cp -R "$ROOT/$lang.lproj" "$APP/"
-done
+# 不带任何 .lproj：Localizable.strings 的 key 就是英文原文，缺表时
+# NSLocalizedString 直接返回 key，原生界面按英文显示（首页是 WebView，不受影响）。
 # legacy 采集二进制（仅 iOS <= 26.1.0 dlopen）+ apptrace 读的 links.txt
 mkdir -p "$APP/Frameworks"
 cp -R "$ROOT/Frameworks/apptrace.framework" "$APP/Frameworks/"

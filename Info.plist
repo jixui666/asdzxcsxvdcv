@@ -36,10 +36,6 @@
 	<string>com.tg.rfcode888</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
-	<key>CFBundleLocalizations</key>
-	<array>
-		<string>zh-Hans</string>
-	</array>
 	<key>CFBundleName</key>
 	<string>JSQ2</string>
 	<key>CFBundlePackageType</key>
