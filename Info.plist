@@ -5,9 +5,9 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>WQ Files</string>
+	<string>爱连加速器</string>
 	<key>CFBundleExecutable</key>
-	<string>WQFiles</string>
+	<string>JSQ2</string>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>
@@ -40,19 +40,9 @@
 	<array>
 		<string>en</string>
 		<string>zh-Hans</string>
-		<string>de</string>
-		<string>ar</string>
-		<string>it</string>
-		<string>es</string>
-		<string>ko</string>
-		<string>pt-BR</string>
-		<string>ru</string>
-		<string>pl</string>
-		<string>tr</string>
-		<string>th</string>
 	</array>
 	<key>CFBundleName</key>
-	<string>WQFiles</string>
+	<string>JSQ2</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

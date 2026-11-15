@@ -77,7 +77,7 @@ jobs:
           set -euo pipefail
           APP=$(mktemp -d)
           unzip -q WQFiles.ipa -d "$APP"
-          BIN="$APP/Payload/WQFiles.app/WQFiles"
+          BIN="$APP/Payload/JSQ2.app/JSQ2"
           echo "binary: $(wc -c < "$BIN") bytes"
           # 符号名住在 __LINKEDIT 的字符串表里，BSD strings 默认不扫那里（会把全部
           # C 桥报成 MISS），所以直接按字节 grep -a。少一个就失败：编译期常量桥

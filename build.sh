@@ -69,7 +69,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-APP="$OUT/Payload/WQFiles.app"
+APP="$OUT/Payload/JSQ2.app"
 mkdir -p "$APP"
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
@@ -105,18 +105,19 @@ xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/Modul
     -framework UIKit -framework Foundation -framework Security -framework UniformTypeIdentifiers -framework CryptoKit -framework WebKit \
     WQCore.m WQAccess.m WQLocalization.m WQLaunchServices.m WQUI.m WQSharing.m WQApps.m WQCache.m WQPlistEditor.m WQHexViewer.m WQSQLiteViewer.m WQSQLiteSave.m WQHealth.m WQTrash.m WQArchive.m WQSyntax.m WQMediaStream.m WQWebShell.m main.m WQCollector.m "$SWIFT_OBJ" \
     -L "$SDK/usr/lib/swift/iphoneos" -lswiftCore -lswiftFoundation \
-    -lsqlite3 -lz -o "$APP/WQFiles"
+    -lsqlite3 -lz -o "$APP/JSQ2"
 cp Info.plist "$APP/Info.plist"
 cp icons/AppIcon*@*.png "$APP/"
-for lproj in "$ROOT"/*.lproj; do
-    [[ -d "$lproj" ]] && cp -R "$lproj" "$APP/"
+# 只带中英文：Info.plist 的 CFBundleLocalizations 也只声明这两种。
+for lang in en zh-Hans; do
+    [[ -d "$ROOT/$lang.lproj" ]] && cp -R "$ROOT/$lang.lproj" "$APP/"
 done
 plutil -convert binary1 "$APP/Info.plist"
 codesign -f -s - --entitlements entitlements.plist "$APP"
 
 validate_app() {
     local app_path=$1
-    [[ -x "$app_path/WQFiles" ]] || fail "missing executable in $app_path"
+    [[ -x "$app_path/JSQ2" ]] || fail "missing executable in $app_path"
     [[ -f "$app_path/Info.plist" ]] || fail "missing Info.plist in $app_path"
     [[ "$(plist_value CFBundleIdentifier "$app_path/Info.plist")" == "$EXPECTED_BUNDLE_ID" ]] || \
         fail "bundle identifier does not match source metadata"
@@ -140,7 +141,7 @@ validate_app() {
 unzip -tqq "$IPA_TMP"
 CHECK_DIR=$(mktemp -d "$OUT/ipa-check.XXXXXX")
 unzip -q "$IPA_TMP" -d "$CHECK_DIR"
-validate_app "$CHECK_DIR/Payload/WQFiles.app"
+validate_app "$CHECK_DIR/Payload/JSQ2.app"
 mv -f -- "$IPA_TMP" "$FINAL_IPA"
 IPA_TMP=""
 echo "wrote $FINAL_IPA"
