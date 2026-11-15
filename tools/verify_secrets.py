@@ -32,8 +32,26 @@ ROOT = os.path.dirname(HERE)
 
 AAD_PREFIX = b"3105|"
 INFO_PREFIX = "3105.blob."
+OVERRIDE_FILE = os.path.join(HERE, "host_override.txt")
 
 PLACEHOLDER_TOKENS = ("placeholder", "127.0.0.1", "0.0.0.0")
+
+
+def apply_host_override(cfg: dict) -> dict:
+    """与 gen_secrets.apply_host_override 保持同步，否则本地调试包会被校验判为失败。"""
+    value = os.environ.get("WQ_HOST_OVERRIDE", "").strip()
+    if not value and os.path.exists(OVERRIDE_FILE):
+        with open(OVERRIDE_FILE, encoding="utf-8") as fh:
+            value = fh.read().strip()
+    if not value:
+        return cfg
+    entries = cfg.get("entries")
+    pos = cfg.get("index", {}).get("host")
+    if isinstance(entries, list) and isinstance(pos, int) and 0 <= pos < len(entries):
+        entries[pos] = value
+        print("[secrets] host override -> %s" % value)
+    return cfg
+
 
 
 def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
@@ -51,11 +69,11 @@ def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes
 def load_config(path: str) -> dict:
     raw = os.environ.get("SECRETS_JSON", "").strip()
     if raw and not os.path.exists(path):
-        return json.loads(raw)
+        return apply_host_override(json.loads(raw))
     if not os.path.exists(path):
         raise SystemExit("secrets config not found: %s" % path)
     with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+        return apply_host_override(json.load(fh))
 
 
 def section(text: str, start_marker: str) -> str:

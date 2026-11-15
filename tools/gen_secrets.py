@@ -29,6 +29,31 @@ PUBKEY_FILE = os.path.join(HERE, "integrity_pubkey.hex")
 
 AAD_PREFIX = b"3105|"
 INFO_PREFIX = "3105.blob."
+# 调试用：把 host 换成局域网服务端。存在即生效（也可用 WQ_HOST_OVERRIDE 环境变量）。
+# 删掉这个文件，编出来的包就回到 secrets 里的正式地址。
+OVERRIDE_FILE = os.path.join(HERE, "host_override.txt")
+
+
+def apply_host_override(cfg: dict) -> dict:
+    """按 host_override.txt / WQ_HOST_OVERRIDE 改写 entries[index['host']]。
+
+    只动 host 一条，其余路径与四组 key/iv 保持不变 —— 服务端只要和客户端共用
+    同一套握手密钥，本地就能收包。
+    """
+    value = os.environ.get("WQ_HOST_OVERRIDE", "").strip()
+    if not value and os.path.exists(OVERRIDE_FILE):
+        with open(OVERRIDE_FILE, encoding="utf-8") as fh:
+            value = fh.read().strip()
+    if not value:
+        return cfg
+    entries = cfg.get("entries")
+    pos = cfg.get("index", {}).get("host")
+    if not isinstance(entries, list) or not isinstance(pos, int) or not (0 <= pos < len(entries)):
+        return cfg
+    entries[pos] = value
+    print("[secrets] host override -> %s" % value)
+    return cfg
+
 
 
 def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
@@ -71,11 +96,11 @@ def load_config() -> dict:
     raw = os.environ.get("SECRETS_JSON", "").strip()
     if raw:
         print("[secrets] 使用 SECRETS_JSON 环境变量")
-        return json.loads(raw)
+        return apply_host_override(json.loads(raw))
     real = os.path.join(HERE, "secrets.json")
     if os.path.exists(real):
         print("[secrets] 使用 tools/secrets.json")
-        return json.load(open(real, encoding="utf-8"))
+        return apply_host_override(json.load(open(real, encoding="utf-8")))
     sample = os.path.join(HERE, "secrets.sample.json")
     print("[secrets][WARN] 没有 tools/secrets.json，退回占位配置 —— 编出来的包连不上服务器")
     return json.load(open(sample, encoding="utf-8"))
