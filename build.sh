@@ -96,7 +96,7 @@ SWIFT_OBJ="$OUT/WQSecrets.o"
 xcrun --sdk iphoneos swiftc \
     -target arm64-apple-ios"$MINIMUM_IOS_VERSION" \
     -sdk "$SDK" \
-    -O -wmo -parse-as-library -DWQ_INTEGRITY_SAFE_MODE \
+    -O -wmo -parse-as-library \
     -emit-object -o "$SWIFT_OBJ" \
     "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQPinnedSession.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/WQLegacyTrace.swift" "$ROOT/IntegrityGuard.swift" "$ROOT/Generated/Secrets.generated.swift"
 

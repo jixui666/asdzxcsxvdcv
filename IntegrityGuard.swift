@@ -36,19 +36,21 @@ enum IntegrityGuard {
         #else
         denyAttach()
 
-        var issues: [String] = []
-        if isTraced() { issues.append("traced") }
+        var fatal: [String] = []
+        var advisory: [String] = []
+        if isTraced() { fatal.append("traced") }
         // 这两项误杀率高（越狱机自带 ellekit/libhooker、重签工具注入的环境变量），
-        // 只作为信息记录，不单独触发退出。
-        if hasInjectedEnvironment() { issues.append("env-injected") }
-        if hasSuspiciousImage() { issues.append("suspicious-image") }
-        issues.append(contentsOf: integrityIssues())
+        // 只作信息记录、不触发退出——与注释的原意一致（3105 里把它们也放进了
+        // 退出判定，实测会让正常设备被误杀）。
+        if hasInjectedEnvironment() { advisory.append("env-injected") }
+        if hasSuspiciousImage() { advisory.append("suspicious-image") }
+        fatal.append(contentsOf: integrityIssues())
 
-        lastIssues = issues
-        guard !issues.isEmpty else {
+        lastIssues = fatal + advisory
+        guard !fatal.isEmpty else {
             return
         }
-        note(issues.joined(separator: ","), fatal: true)
+        note(fatal.joined(separator: ","), fatal: true)
 
         #if WQ_INTEGRITY_SAFE_MODE
         // 诊断构建：只记录，不退出（确认清单干净后再切严格）
