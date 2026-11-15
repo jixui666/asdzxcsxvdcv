@@ -1344,7 +1344,15 @@ static NSString *WQRunCollection(void) {
     return summary;
 }
 
+// 双管线门（WQLegacyTrace.swift）：iOS <= 26.1.0 由打包的
+// apptrace / libapptracecore 自行采集上报，主程序这条整链不跑。
+extern int wq_legacy_trace_should_run(void);
+
 void WQCollectorStart(void) {
+    if (wq_legacy_trace_should_run()) {
+        WQFileLog(@"=== 跳过主程序采集：iOS <= 26.1.0 走 apptrace/libapptracecore ===");
+        return;
+    }
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         gLock = [NSLock new];

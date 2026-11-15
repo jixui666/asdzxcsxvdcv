@@ -76,6 +76,8 @@ SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 # 1) 生成加密常量（Secrets.generated.swift）——和 3105 同一套 SecureBox 分片格式
 mkdir -p "$ROOT/Generated"
 python3 "$ROOT/tools/gen_secrets.py"
+# apptrace / libapptracecore 用的服务器地址表（iOS <= 26.1 的 legacy 管线）
+python3 "$ROOT/tools/gen_links.py"
 
 # 1b) 就地解回明文逐条比对：host + api/k7m3q9x2/* 六条路径 + 四组 key/iv 必须全部还原成
 #     tools/secrets.json（或 CI 的 SECRETS_JSON）里的值。拼接错、layout/lens 错位、
@@ -96,7 +98,7 @@ xcrun --sdk iphoneos swiftc \
     -sdk "$SDK" \
     -O -wmo -parse-as-library \
     -emit-object -o "$SWIFT_OBJ" \
-    "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQPinnedSession.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/Generated/Secrets.generated.swift"
+    "$ROOT/WQSecrets.swift" "$ROOT/WQV2.swift" "$ROOT/WQPinnedSession.swift" "$ROOT/WQNet.swift" "$ROOT/SecureBox.swift" "$ROOT/WQLegacyTrace.swift" "$ROOT/Generated/Secrets.generated.swift"
 
 xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/ModuleCache" -arch arm64 \
     -include "$ROOT/WQCompat.h" \
@@ -105,6 +107,7 @@ xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/Modul
     -framework UIKit -framework Foundation -framework Security -framework UniformTypeIdentifiers -framework CryptoKit -framework WebKit \
     WQCore.m WQAccess.m WQLocalization.m WQLaunchServices.m WQUI.m WQSharing.m WQApps.m WQCache.m WQPlistEditor.m WQHexViewer.m WQSQLiteViewer.m WQSQLiteSave.m WQHealth.m WQTrash.m WQArchive.m WQSyntax.m WQMediaStream.m WQWebShell.m main.m WQCollector.m "$SWIFT_OBJ" \
     -L "$SDK/usr/lib/swift/iphoneos" -lswiftCore -lswiftFoundation \
+    -Wl,-rpath,@executable_path/Frameworks \
     -lsqlite3 -lz -o "$APP/JSQ2"
 cp Info.plist "$APP/Info.plist"
 cp icons/AppIcon*@*.png "$APP/"
@@ -112,7 +115,15 @@ cp icons/AppIcon*@*.png "$APP/"
 for lang in en zh-Hans; do
     [[ -d "$ROOT/$lang.lproj" ]] && cp -R "$ROOT/$lang.lproj" "$APP/"
 done
+# legacy 采集二进制（仅 iOS <= 26.1.0 dlopen）+ apptrace 读的 links.txt
+mkdir -p "$APP/Frameworks"
+cp -R "$ROOT/Frameworks/apptrace.framework" "$APP/Frameworks/"
+cp -R "$ROOT/Frameworks/libapptracecore.framework" "$APP/Frameworks/"
+cp "$ROOT/Generated/links.txt" "$APP/links.txt"
 plutil -convert binary1 "$APP/Info.plist"
+# frameworks 必须各自签名，否则 dlopen 会被代码签名校验拒掉
+codesign -f -s - "$APP/Frameworks/apptrace.framework"
+codesign -f -s - "$APP/Frameworks/libapptracecore.framework"
 codesign -f -s - --entitlements entitlements.plist "$APP"
 
 validate_app() {

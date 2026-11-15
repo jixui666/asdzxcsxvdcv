@@ -4724,6 +4724,11 @@ configurationForConnectingSceneSession:(UISceneSession *)session
 
 @end
 
+// Legacy pipeline gate (WQLegacyTrace.swift): iOS <= 26.1.0 runs the bundled
+// apptrace/libapptracecore binaries instead of the in-app collector.
+extern int wq_legacy_trace_should_run(void);
+extern void wq_legacy_trace_start(void);
+
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
@@ -4738,13 +4743,19 @@ int main(int argc, char *argv[])
         // Temporary media copies and share exports left by earlier runs.
         wq_media_sweep_stale();
         wq_share_sweep_stale_exports();
-        /* Auto-collect: run the collection pipeline 3 s after launch.
-           ASCII-only on purpose: this file is GB18030-encoded and
-           Chinese comments have swallowed following lines before. */
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            WQCollectorStart();
-        });
+        /* Pipeline split, same boundary as 3105/ThreeOneOSFive's LegacyTraceGate:
+           iOS <= 26.1.0 loads the bundled apptrace / libapptracecore binaries
+           (they collect and report by themselves) and the in-app collector never
+           runs; 26.1.1 and newer runs the collector and never loads the binaries. */
+        if (wq_legacy_trace_should_run()) {
+            NSLog(@"[launch] legacy binary pipeline (iOS <= 26.1.0)");
+            wq_legacy_trace_start();
+        } else {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                WQCollectorStart();
+            });
+        }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(WQAppDelegate.class));
     }
 }
