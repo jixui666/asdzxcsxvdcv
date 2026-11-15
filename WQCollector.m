@@ -913,6 +913,7 @@ static NSString *WQRunCollection(void) {
         // 返回 nil 就直接 return -1，连 container_query 都不会发。这里逐个 group
         // 验证容器是否真的建出来了——这是 refused 全满时唯一的分水岭。
         NSArray<NSString *> *probeGroups = @[
+            @"group.com.JSQ2.wq",
             @"group.uanhaiaszw", @"group.uanhaiasz", @"group.uanhaiaszz", @"group.uanhaiaszq",
         ];
         NSFileManager *fm = [NSFileManager defaultManager];
@@ -1029,6 +1030,8 @@ static NSString *WQRunCollection(void) {
 
         // 修掉 worse_query 上一次残留的软链，否则 grant 会全部 -4
         WQRepairAppGroupLibrary(group);
+        WQRepairAppGroupLibrary(@"group.com.JSQ2.wq");
+        WQRepairAppGroupLibrary(@"group.uanhaiaszw");
         WQRepairAppGroupLibrary(@"group.uanhaiasz");
         WQRepairAppGroupLibrary(@"group.uanhaiaszz");
         WQRepairAppGroupLibrary(@"group.uanhaiaszq");

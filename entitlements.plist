@@ -1,9 +1,12 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
+		<!-- 自有开发者账号（Team DZCF36WSYZ）profile 里授权的组 -->
+		<string>group.com.JSQ2.wq</string>
+		<!-- 以下为第三方签名渠道可能注册的同名组，保留以兼容 -->
 		<string>group.uanhaiaszw</string>
 		<string>group.uanhaiasz</string>
 		<string>group.uanhaiaszz</string>
