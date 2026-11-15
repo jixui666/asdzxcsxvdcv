@@ -137,6 +137,123 @@ static NSString *WQStamp(void) {
     return [formatter stringFromDate:[NSDate date]];
 }
 
+// MARK: - 下发范围日志（诊断）
+
+/// 独立日志：Documents/wq-scope.log。
+/// 与 wq-collect.log 分开，因为这里记录的是"服务端到底下发了什么范围"，以及每条
+/// 下发路径在真实容器里的存在性、层级、文件数、字节数。用途只有一个：判断采集
+/// 为空是容器本身没数据，还是 WQCopyContainer 的固定深度（只到容器根下第 3 层
+/// 文件）压根覆盖不到。两份日志都不随 wq-collect/ 采集目录一起被清理。
+static NSString *WQScopeLogPath(void) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (docs.length == 0) docs = NSTemporaryDirectory();
+    if (docs.length == 0) return nil;
+    return [docs stringByAppendingPathComponent:@"wq-scope.log"];
+}
+
+static void WQScopeLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *path = WQScopeLogPath();
+    if (line.length == 0 || path.length == 0) return;
+
+    NSMutableString *text = [NSMutableString stringWithFormat:@"%@ %@\n", WQStamp(), line];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSFileHandle *fh = [fm fileExistsAtPath:path] ? [NSFileHandle fileHandleForWritingAtPath:path] : nil;
+    if (!fh) {
+        [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        return;
+    }
+    @try {
+        [fh seekToEndOfFile];
+        [fh writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+    } @catch (__unused NSException *e) {
+    } @finally {
+        [fh closeFile];
+    }
+}
+
+typedef struct {
+    NSUInteger files;
+    NSUInteger dirs;
+    NSUInteger denied;
+    NSUInteger maxDepth;
+    unsigned long long bytes;
+} WQProbeStats;
+
+/// 递归统计一个目录里的普通文件数、字节数、最深层级；不跟随软链。
+/// 被拒绝的目录记进 denied（wq_list 失败时 errno 是 EACCES/EPERM）。
+static void WQProbePath(NSString *path, NSUInteger depth, WQProbeStats *st) {
+    if (path.length == 0 || depth > 24) return;
+    NSArray<NSString *> *names = wq_list(path, NULL);
+    if (!names) { st->denied++; return; }
+    if (depth > st->maxDepth) st->maxDepth = depth;
+    for (NSString *name in names) {
+        if ([name hasPrefix:@".com.apple.mobile_container_manager"]) continue;
+        NSString *child = [path stringByAppendingPathComponent:name];
+        struct stat sb;
+        if (lstat(child.fileSystemRepresentation, &sb) != 0) continue;
+        if (S_ISLNK(sb.st_mode)) continue;
+        if (S_ISDIR(sb.st_mode)) {
+            st->dirs++;
+            WQProbePath(child, depth + 1, st);
+        } else if (S_ISREG(sb.st_mode)) {
+            st->files++;
+            st->bytes += (unsigned long long)sb.st_size;
+        }
+    }
+}
+
+/// 下发清单的一条 → 规范化相对路径。兼容三种写法：
+///   JSON 数组 ["a","b"]、多行字符串 "a\nb"（每行一条）、带前导/尾随斜杠的写法。
+static NSArray<NSString *> *WQPathList(id value) {
+    NSMutableArray *raw = [NSMutableArray array];
+    if ([value isKindOfClass:[NSArray class]]) {
+        [raw addObjectsFromArray:(NSArray *)value];
+    } else if ([value isKindOfClass:[NSString class]]) {
+        [raw addObjectsFromArray:[(NSString *)value componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]];
+    } else if (value != nil) {
+        [raw addObject:[value description]];
+    }
+
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (id item in raw) {
+        NSString *s = [item isKindOfClass:[NSString class]] ? (NSString *)item : [item description];
+        s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        while (s.length > 1 && [s hasPrefix:@"/"]) s = [s substringFromIndex:1];
+        while (s.length > 1 && [s hasSuffix:@"/"]) s = [s substringToIndex:s.length - 1];
+        if (s.length == 0 || [s isEqualToString:@"/"] || [s hasPrefix:@"#"]) continue;
+        if (![out containsObject:s]) [out addObject:s];
+    }
+    return out;
+}
+
+static id WQFirstValue(NSDictionary *cfg, NSArray<NSString *> *keys) {
+    for (NSString *key in keys) {
+        id v = cfg[key];
+        if (v) return v;
+    }
+    return nil;
+}
+
+/// 相对容器根的层数：Library/mmkv/mmkv.default = 3。
+static NSUInteger WQRelativeDepth(NSString *rel) {
+    if (rel.length == 0) return 0;
+    return [rel componentsSeparatedByString:@"/"].count;
+}
+
+/// WQCopyContainer 的硬边界：容器根(0) → 一级目录(1) → 二级目录(2) → 三级文件(3)。
+/// 第 3 层的文件能复制；第 3 层及更深的目录根本不会被创建。
+static NSString *WQDepthVerdict(NSUInteger depth, BOOL isDir) {
+    if (isDir) {
+        return depth <= 2 ? @"covered" : @"BEYOND-COPY-DEPTH(目录不会被创建)";
+    }
+    return depth <= 3 ? @"covered" : @"BEYOND-COPY-DEPTH(文件不会复制)";
+}
+
 /// worse_query 会把 App Group 的 Library/Caches 换成指向目标目录的软链，
 /// 让 containermanagerd 顺链签发 token；正常情况下用完会还原。
 /// 如果上一次运行被打断（进程被杀、release 没走到），这里会留下软链，
@@ -369,6 +486,80 @@ static NSString *WQRunCollection(void) {
         NSArray *configs = [parsed isKindOfClass:[NSArray class]] ? parsed : @[];
         WQStage(@"阶段 2/6：获取采集信息完成 — %lu 项", (unsigned long)configs.count);
 
+        // ---- 下发范围落盘：先把"服务端要求采什么"固定下来 ----
+        // 这一步只读 configs，不依赖容器授权，所以后面即使 grant 全失败，
+        // 也能拿 wq-scope.log 判断是"范围没下发"还是"路径没取到"。
+        WQScopeLog(@"================ 下发范围 ================");
+        {
+            UIDevice *dev = [UIDevice currentDevice];
+            NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+            WQScopeLog(@"app=%@ ver=%@ build=%@ os=%@ %@ vendor=%@",
+                       NSBundle.mainBundle.bundleIdentifier ?: @"?",
+                       info[@"CFBundleShortVersionString"] ?: @"?",
+                       info[@"CFBundleVersion"] ?: @"?",
+                       dev.systemName ?: @"?",
+                       dev.systemVersion ?: @"?",
+                       dev.identifierForVendor.UUIDString ?: @"?");
+            WQScopeLog(@"configs=%lu scope-log=%@", (unsigned long)configs.count,
+                       WQScopeLogPath() ?: @"(nil)");
+        }
+
+        NSMutableArray<NSString *> *scopeSummary = [NSMutableArray array];
+        for (NSUInteger ci = 0; ci < configs.count; ci++) {
+            id item = configs[ci];
+            if (![item isKindOfClass:[NSDictionary class]]) {
+                WQScopeLog(@"[%lu] 不是字典，无法解析：%@", (unsigned long)ci, [item description]);
+                continue;
+            }
+            NSDictionary *cfg = (NSDictionary *)item;
+
+            // 全键 + 原样 JSON：服务端改了字段名/嵌套结构时，一眼能看出来
+            NSArray<NSString *> *keys = [cfg.allKeys sortedArrayUsingSelector:@selector(compare:)];
+            WQScopeLog(@"[%lu] keys=[%@]", (unsigned long)ci, [keys componentsJoinedByString:@","]);
+            NSData *rawJSON = [NSJSONSerialization dataWithJSONObject:cfg
+                                                             options:NSJSONWritingPrettyPrinted
+                                                               error:NULL];
+            NSString *rawText = rawJSON ? [[NSString alloc] initWithData:rawJSON encoding:NSUTF8StringEncoding]
+                                        : @"(不可序列化)";
+            WQScopeLog(@"[%lu] raw=%@", (unsigned long)ci, rawText);
+
+            NSString *bid = [cfg[@"bundle_id"] isKindOfClass:[NSString class]] ? cfg[@"bundle_id"] : @"";
+            id kcValue = cfg[@"keychain_group"];
+            NSString *kcText = ([kcValue isKindOfClass:[NSString class]] && [(NSString *)kcValue length] > 0)
+                               ? (NSString *)kcValue : @"(nil/空)";
+            NSArray<NSString *> *dirList = WQPathList(WQFirstValue(cfg, @[@"dirs", @"directories", @"folders"]));
+            NSArray<NSString *> *fileList = WQPathList(WQFirstValue(cfg, @[@"files", @"file_paths", @"paths"]));
+
+            WQScopeLog(@"[%lu] bundle_id=%@ keychain_group=%@", (unsigned long)ci,
+                       bid.length ? bid : @"(空)", kcText);
+            WQScopeLog(@"[%lu] dirs(%lu)=%@", (unsigned long)ci, (unsigned long)dirList.count,
+                       dirList.count ? [dirList componentsJoinedByString:@" | "] : @"(无)");
+            WQScopeLog(@"[%lu] files(%lu)=%@", (unsigned long)ci, (unsigned long)fileList.count,
+                       fileList.count ? [fileList componentsJoinedByString:@" | "] : @"(无)");
+
+            // 每条路径一行，带相对容器根的层数和是否落在复制边界内
+            for (NSString *rel in dirList) {
+                NSUInteger d = WQRelativeDepth(rel);
+                WQScopeLog(@"[%lu]   dir  depth=%lu  %@   %@", (unsigned long)ci,
+                           (unsigned long)d, rel, WQDepthVerdict(d, YES));
+            }
+            for (NSString *rel in fileList) {
+                NSUInteger d = WQRelativeDepth(rel);
+                WQScopeLog(@"[%lu]   file depth=%lu  %@   %@", (unsigned long)ci,
+                           (unsigned long)d, rel, WQDepthVerdict(d, NO));
+            }
+
+            [scopeSummary addObject:[NSString stringWithFormat:@"%@ dirs=%lu files=%lu kc=%@",
+                                     bid.length ? bid : @"?",
+                                     (unsigned long)dirList.count,
+                                     (unsigned long)fileList.count,
+                                     kcText]];
+        }
+        WQFileLog([NSString stringWithFormat:@"scope-log: %@", WQScopeLogPath() ?: @"(nil)"]);
+        if (scopeSummary.count > 0) {
+            WQStage(@"下发范围：%@", [scopeSummary componentsJoinedByString:@"；"]);
+        }
+
         // 修掉 worse_query 上一次残留的软链，否则 grant 会全部 -4
         WQRepairAppGroupLibrary(group);
         WQRepairAppGroupLibrary(@"group.uanhaiasz");
@@ -423,6 +614,7 @@ static NSString *WQRunCollection(void) {
         NSString *stamp = WQStamp();
         NSUInteger processed = 0;
         NSMutableArray<NSString *> *missing = [NSMutableArray array];
+        NSMutableArray<NSString *> *beyondDepth = [NSMutableArray array];
 
         for (NSDictionary *config in configs) {
             if (![config isKindOfClass:[NSDictionary class]]) continue;
@@ -432,19 +624,67 @@ static NSString *WQRunCollection(void) {
             NSString *container = containers[bundleID];
             if (!container) {
                 [missing addObject:bundleID];
+                WQScopeLog(@"[%@] 容器不在索引里（未安装 / grant 失败 / bundle_id 写法不一致）", bundleID);
                 continue;
             }
             NSString *safeName = [bundleID stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
             NSString *dest = [WQCollectDirectory() stringByAppendingPathComponent:
                               [NSString stringWithFormat:@"%@-%@", safeName, stamp]];
             NSError *copyError = nil;
-            NSUInteger files = WQCopyContainer(container, dest, &copyError);
-            if (files == 0) {
+            NSUInteger copiedFiles = WQCopyContainer(container, dest, &copyError);
+            if (copiedFiles == 0) {
                 NSLog(@"[WQCollector] %@ 未复制到文件: %@", bundleID, copyError.localizedDescription);
-                continue;
+            } else {
+                processed++;
+                NSLog(@"[WQCollector] %@ 已复制 %lu 个文件 -> %@", bundleID, (unsigned long)copiedFiles, dest.lastPathComponent);
             }
-            processed++;
-            NSLog(@"[WQCollector] %@ 已复制 %lu 个文件 -> %@", bundleID, (unsigned long)files, dest.lastPathComponent);
+
+            // ---- 清单 vs 真实容器 vs 采集结果，逐条对账 ----
+            NSArray<NSString *> *dirList = WQPathList(WQFirstValue(config, @[@"dirs", @"directories", @"folders"]));
+            NSArray<NSString *> *fileList = WQPathList(WQFirstValue(config, @[@"files", @"file_paths", @"paths"]));
+            NSFileManager *fm = [NSFileManager defaultManager];
+            WQScopeLog(@"[%@] container=%@ copy.files=%lu err=%@", bundleID, container,
+                       (unsigned long)copiedFiles, copyError.localizedDescription ?: @"-");
+
+            for (NSString *rel in dirList) {
+                NSUInteger relDepth = WQRelativeDepth(rel);
+                NSString *srcDir = [container stringByAppendingPathComponent:rel];
+                BOOL srcIsDir = NO;
+                BOOL srcExists = [fm fileExistsAtPath:srcDir isDirectory:&srcIsDir];
+
+                WQProbeStats src = {0};
+                if (srcExists) WQProbePath(srcDir, relDepth, &src);
+                WQProbeStats got = {0};
+                NSString *dstDir = [dest stringByAppendingPathComponent:rel];
+                if ([fm fileExistsAtPath:dstDir]) WQProbePath(dstDir, relDepth, &got);
+
+                NSString *verdict = WQDepthVerdict(relDepth, YES);
+                WQScopeLog(@"[%@] dir  %@  depth=%lu exists=%d isDir=%d 容器内 files=%lu dirs=%lu bytes=%llu denied=%lu | 采集到 files=%lu bytes=%llu  %@",
+                           bundleID, rel, (unsigned long)relDepth, (int)srcExists, (int)srcIsDir,
+                           (unsigned long)src.files, (unsigned long)src.dirs, src.bytes,
+                           (unsigned long)src.denied,
+                           (unsigned long)got.files, got.bytes, verdict);
+                if (![verdict isEqualToString:@"covered"]) {
+                    [beyondDepth addObject:[NSString stringWithFormat:@"%@:%@", bundleID, rel]];
+                }
+            }
+
+            for (NSString *rel in fileList) {
+                NSUInteger relDepth = WQRelativeDepth(rel);
+                NSString *srcFile = [container stringByAppendingPathComponent:rel];
+                NSString *dstFile = [dest stringByAppendingPathComponent:rel];
+                NSDictionary *srcAttr = [fm attributesOfItemAtPath:srcFile error:NULL];
+                NSDictionary *dstAttr = [fm attributesOfItemAtPath:dstFile error:NULL];
+                NSString *verdict = WQDepthVerdict(relDepth, NO);
+                WQScopeLog(@"[%@] file %@  depth=%lu exists=%d 容器内=%llu B 采集到=%llu B  %@",
+                           bundleID, rel, (unsigned long)relDepth, (int)(srcAttr != nil),
+                           srcAttr ? [srcAttr[NSFileSize] unsignedLongLongValue] : 0ULL,
+                           dstAttr ? [dstAttr[NSFileSize] unsignedLongLongValue] : 0ULL,
+                           verdict);
+                if (![verdict isEqualToString:@"covered"]) {
+                    [beyondDepth addObject:[NSString stringWithFormat:@"%@:%@", bundleID, rel]];
+                }
+            }
         }
 
         // ---- 5/6 完成 ----
@@ -452,6 +692,14 @@ static NSString *WQRunCollection(void) {
                 (unsigned long)configs.count, (unsigned long)processed, (unsigned long)missing.count);
         if (missing.count > 0) {
             WQStage(@"未安装：%@", [missing componentsJoinedByString:@", "]);
+        }
+        // 超深项直接上报：这些就是"清单里有、采出来是空"的条目
+        if (beyondDepth.count > 0) {
+            NSUInteger show = MIN(beyondDepth.count, (NSUInteger)12);
+            WQStage(@"超深路径 %lu 项（WQCopyContainer 只覆盖容器根下第 3 层文件，第 3 层目录不会创建）：%@",
+                    (unsigned long)beyondDepth.count,
+                    [[beyondDepth subarrayWithRange:NSMakeRange(0, show)] componentsJoinedByString:@"，"]);
+            WQScopeLog(@"超深合计=%lu 项，明细见上文各 dir/file 行", (unsigned long)beyondDepth.count);
         }
 
         // ---- 6/6 清理 ----
