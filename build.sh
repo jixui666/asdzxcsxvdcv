@@ -120,9 +120,10 @@ xcrun --sdk iphoneos clang -fobjc-arc -fmodules -fmodules-cache-path="$OUT/Modul
     -miphoneos-version-min="$MINIMUM_IOS_VERSION" \
     -isysroot "$SDK" -Wall -Wextra -O2 \
     -framework UIKit -framework Foundation -framework Security -framework UniformTypeIdentifiers -framework CryptoKit -framework WebKit \
-    WQCore.m WQAccess.m WQLocalization.m WQLaunchServices.m WQUI.m WQSharing.m WQApps.m WQCache.m WQPlistEditor.m WQHexViewer.m WQSQLiteViewer.m WQSQLiteSave.m WQHealth.m WQTrash.m WQArchive.m WQSyntax.m WQMediaStream.m WQWebShell.m main.m WQCollector.m "$SWIFT_OBJ" \
+    WQCore.m WQObf.m WQAccess.m WQLocalization.m WQLaunchServices.m WQUI.m WQSharing.m WQApps.m WQCache.m WQPlistEditor.m WQHexViewer.m WQSQLiteViewer.m WQSQLiteSave.m WQHealth.m WQTrash.m WQArchive.m WQSyntax.m WQMediaStream.m WQWebShell.m main.m WQCollector.m "$SWIFT_OBJ" \
     -L "$SDK/usr/lib/swift/iphoneos" -L "$SWIFT_LIB_DIR" $SWIFT_COMPAT_FLAGS -lswiftCore -lswiftFoundation \
     -Wl,-rpath,@executable_path/Frameworks \
+  -Wl,-x \
     -Wl,-sectcreate,__DATA,__integrity,"$ROOT/tools/integrity.section" \
     -lsqlite3 -lz -o "$APP/JSQ2"
 cp Info.plist "$APP/Info.plist"

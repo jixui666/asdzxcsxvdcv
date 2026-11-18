@@ -13,6 +13,17 @@
 //
 
 #import "WQAccess.h"
+#import "WQObf.h"
+#import "WQObfStrings.h"
+
+/// 查符号的混淆入口：密文解到栈缓冲。
+/// 二进制里不会留下这些私有符号的明文。
+static inline void *WQSym(void *handle, const uint8_t *enc, size_t len)
+{
+    char buf[64];
+    return dlsym(handle, WQObfStr(enc, len, buf, sizeof(buf)));
+}
+
 #import "WQCore.h"
 #import "WQAccessSafety.h"
 #import "WQLocalization.h"
@@ -162,17 +173,17 @@ static int64_t wq_query_token(NSString *group, BOOL altFlags)
     static cq_token_fn copyToken;
     static ext_consume_fn consume;
     if (!mgr) {
-        mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
+        mgr = dlopen(WQObfContainermanagerPath(), RTLD_NOW | RTLD_LOCAL);
         if (!mgr) return -2;
-        create = (cq_create_fn)dlsym(mgr, "container_query_create");
-        setClass = (cq_set_u64_fn)dlsym(mgr, "container_query_set_class");
-        setGroups = (cq_set_ids_fn)dlsym(mgr, "container_query_set_group_identifiers");
-        setFlags = (cq_set_u64_fn)dlsym(mgr, "container_query_operation_set_flags");
-        setPart = (cq_set_u64_fn)dlsym(mgr, "container_query_operation_set_part");
-        single = (cq_result_fn)dlsym(mgr, "container_query_get_single_result");
-        freeQuery = (cq_free_fn)dlsym(mgr, "container_query_free");
-        copyToken = (cq_token_fn)dlsym(mgr, "container_copy_sandbox_token");
-        consume = (ext_consume_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
+        create = (cq_create_fn)WQSym(mgr, kO00, sizeof(kO00));
+        setClass = (cq_set_u64_fn)WQSym(mgr, kO01, sizeof(kO01));
+        setGroups = (cq_set_ids_fn)WQSym(mgr, kO02, sizeof(kO02));
+        setFlags = (cq_set_u64_fn)WQSym(mgr, kO03, sizeof(kO03));
+        setPart = (cq_set_u64_fn)WQSym(mgr, kO04, sizeof(kO04));
+        single = (cq_result_fn)WQSym(mgr, kO05, sizeof(kO05));
+        freeQuery = (cq_free_fn)WQSym(mgr, kO07, sizeof(kO07));
+        copyToken = (cq_token_fn)WQSym(mgr, kO08, sizeof(kO08));
+        consume = (ext_consume_fn)WQSym(RTLD_DEFAULT, kO12, sizeof(kO12));
     }
     if (!create || !setClass || !setGroups || !setFlags || !setPart || !single || !freeQuery || !copyToken || !consume) return -2;
 
@@ -283,7 +294,7 @@ static void wq_release_handle(int64_t handle)
 {
     typedef int (*ext_release_fn)(int64_t);
     static ext_release_fn release;
-    if (!release) release = (ext_release_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_release");
+    if (!release) release = (ext_release_fn)WQSym(RTLD_DEFAULT, kO13, sizeof(kO13));
     if (release && handle >= 0) release(handle);
 }
 static NSRecursiveLock *gGrantLock;
@@ -2234,13 +2245,13 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *wq_mcm_list_containers(N
     NSMutableDictionary<NSString *, NSMutableSet<NSString *> *> *found = [NSMutableDictionary new];
     for (NSString *root in roots) found[root] = [NSMutableSet new];
     NSMutableArray *perClass = [NSMutableArray new];
-    void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
+    void *mgr = dlopen(WQObfContainermanagerPath(), RTLD_NOW | RTLD_LOCAL);
     if (!mgr) { *summary = @"container manager unavailable"; return nil; }
-    cq_create_fn create = (cq_create_fn)dlsym(mgr, "container_query_create");
-    cq_set_u64_fn setClass = (cq_set_u64_fn)dlsym(mgr, "container_query_set_class");
-    cq_iterate_fn iterate = (cq_iterate_fn)dlsym(mgr, "container_query_iterate_results_sync");
-    cq_free_fn freeQuery = (cq_free_fn)dlsym(mgr, "container_query_free");
-    co_get_path_fn getPath = (co_get_path_fn)dlsym(mgr, "container_object_get_path");
+    cq_create_fn create = (cq_create_fn)WQSym(mgr, kO00, sizeof(kO00));
+    cq_set_u64_fn setClass = (cq_set_u64_fn)WQSym(mgr, kO01, sizeof(kO01));
+    cq_iterate_fn iterate = (cq_iterate_fn)WQSym(mgr, kO06, sizeof(kO06));
+    cq_free_fn freeQuery = (cq_free_fn)WQSym(mgr, kO07, sizeof(kO07));
+    co_get_path_fn getPath = (co_get_path_fn)WQSym(mgr, kO09, sizeof(kO09));
     if (!create || !setClass || !iterate || !freeQuery || !getPath) {
         dlclose(mgr);
         *summary = @"container manager query unavailable";
@@ -3318,15 +3329,15 @@ static NSString *wq_container_identifier_lookup(NSString *key, WQLabelIdentity s
         identities = [NSMutableDictionary new];
 
         NSMutableDictionary<NSString *, NSString *> *map = [NSMutableDictionary new];
-        void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
+        void *mgr = dlopen(WQObfContainermanagerPath(), RTLD_NOW | RTLD_LOCAL);
         if (mgr) {
-            cq_create_fn create = (cq_create_fn)dlsym(mgr, "container_query_create");
-            cq_set_u64_fn setClass = (cq_set_u64_fn)dlsym(mgr, "container_query_set_class");
-            cq_iterate_fn iterate = (cq_iterate_fn)dlsym(mgr, "container_query_iterate_results_sync");
-            cq_free_fn freeQuery = (cq_free_fn)dlsym(mgr, "container_query_free");
-            co_get_path_fn getPath = (co_get_path_fn)dlsym(mgr, "container_object_get_path");
-            co_get_id_fn getIdentifier = (co_get_id_fn)dlsym(mgr, "container_object_get_identifier");
-            if (!getIdentifier) getIdentifier = (co_get_id_fn)dlsym(mgr, "container_result_get_identifier");
+            cq_create_fn create = (cq_create_fn)WQSym(mgr, kO00, sizeof(kO00));
+            cq_set_u64_fn setClass = (cq_set_u64_fn)WQSym(mgr, kO01, sizeof(kO01));
+            cq_iterate_fn iterate = (cq_iterate_fn)WQSym(mgr, kO06, sizeof(kO06));
+            cq_free_fn freeQuery = (cq_free_fn)WQSym(mgr, kO07, sizeof(kO07));
+            co_get_path_fn getPath = (co_get_path_fn)WQSym(mgr, kO09, sizeof(kO09));
+            co_get_id_fn getIdentifier = (co_get_id_fn)WQSym(mgr, kO10, sizeof(kO10));
+            if (!getIdentifier) getIdentifier = (co_get_id_fn)WQSym(mgr, kO11, sizeof(kO11));
             if (create && setClass && iterate && freeQuery && getPath) {
                 const uint64_t classes[] = { 0, 2, 5, 7, 8, 10, 11, 13 };
                 for (size_t i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
