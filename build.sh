@@ -130,18 +130,18 @@ cp Info.plist "$APP/Info.plist"
 cp icons/AppIcon*@*.png "$APP/"
 # 不带任何 .lproj：Localizable.strings 的 key 就是英文原文，缺表时
 # NSLocalizedString 直接返回 key，原生界面按英文显示（首页是 WebView，不受影响）。
-# legacy 采集二进制（仅 iOS <= 26.1.0 dlopen）+ apptrace 读的 links.txt
-mkdir -p "$APP/Frameworks"
-cp -R "$ROOT/Frameworks/apptrace.framework" "$APP/Frameworks/"
-cp -R "$ROOT/Frameworks/libapptracecore.framework" "$APP/Frameworks/"
+# 这一版不带 legacy 采集二进制：
+#   apptrace / libapptracecore 只服务 iOS <= 26.1.0 的老管线，
+#   26.1.1+ 走 in-app 的 MCM / worse_query 路径，完全用不到它们。
+#   去掉之后 IPA 少 8.9 MB，静态扫描也少两个可疑 framework。
+#   运行时 wq_legacy_trace_start() 找不到 dylib 会静默跳过，不会崩。
 cp "$ROOT/Generated/links.txt" "$APP/links.txt"
 plutil -convert binary1 "$APP/Info.plist"
 # 清单 + Ed25519 签名回填到 __DATA,__integrity（必须在 codesign 之前：
 # codesign 只改 load commands 与追加签名块，不动 __TEXT.__text / __DATA.__integrity）
 python3 "$ROOT/tools/integrity_sign.py" --binary "$APP/JSQ2" --app "$APP"
 # frameworks 必须各自签名，否则 dlopen 会被代码签名校验拒掉
-codesign -f -s - "$APP/Frameworks/apptrace.framework"
-codesign -f -s - "$APP/Frameworks/libapptracecore.framework"
+# (frameworks 不再打包，无需单独签名)
 codesign -f -s - --entitlements entitlements.plist "$APP"
 
 validate_app() {

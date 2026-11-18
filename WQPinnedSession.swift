@@ -32,7 +32,9 @@ final class WQPinnedSession {
     ]
 
     static let allowCAFallback = false
-    static let enabled = true
+    // http:// 用不了证书 pin；本地调试版直接关掉。
+    // enabled(for:) 在 enabled=false 时一律返回 false，PinDelegate 走 performDefaultHandling。
+    static let enabled = false
 
     /// 运行时观察到的 SPKI 哈希（域名 -> base64），排障用。
     static var observed: [String: String] = [:]

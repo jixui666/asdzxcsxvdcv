@@ -48,6 +48,16 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>81</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 本地调试：允许 http（192.168.1.8:8001 是明文，iOS 默认 ATS 会拦） -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>需要访问本地网络以连接调试服务器</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
