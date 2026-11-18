@@ -13,6 +13,7 @@
 //
 
 #import "WQAccess.h"
+#import <dlfcn.h>
 #import "WQObf.h"
 #import "WQObfStrings.h"
 
