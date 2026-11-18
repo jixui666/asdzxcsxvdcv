@@ -15,14 +15,14 @@
 #import "WQAccess.h"
 #import <dlfcn.h>
 #import "WQObf.h"
-#import "WQObfStrings.h"
+#import "_wq0ings.h"
 
 /// 查符号的混淆入口：密文解到栈缓冲。
 /// 二进制里不会留下这些私有符号的明文。
 static inline void *WQSym(void *handle, const uint8_t *enc, size_t len)
 {
     char buf[64];
-    return dlsym(handle, WQObfStr(enc, len, buf, sizeof(buf)));
+    return dlsym(handle, _wq0(enc, len, buf, sizeof(buf)));
 }
 
 #import "WQCore.h"
@@ -141,7 +141,7 @@ NSString *wq_app_group(void)
                 break;
             }
         }
-        wq_log(@"App group: %@ (entitled: %@)", group ?: @"NONE",
+        wq_log(@"group: %@ (ent: %@)", group ?: @"NONE",
                groups.count ? [groups componentsJoinedByString:@", "] : @"none");
     });
     return group;
@@ -174,7 +174,7 @@ static int64_t wq_query_token(NSString *group, BOOL altFlags)
     static cq_token_fn copyToken;
     static ext_consume_fn consume;
     if (!mgr) {
-        mgr = dlopen(WQObfContainermanagerPath(), RTLD_NOW | RTLD_LOCAL);
+        mgr = dlopen(_wq2(), RTLD_NOW | RTLD_LOCAL);
         if (!mgr) return -2;
         create = (cq_create_fn)WQSym(mgr, kO00, sizeof(kO00));
         setClass = (cq_set_u64_fn)WQSym(mgr, kO01, sizeof(kO01));
@@ -257,7 +257,7 @@ BOOL wq_reset_access_cache(NSString **errorText)
 {
     NSString *group = wq_app_group();
     NSURL *root = group ? [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:group] : nil;
-    if (!root) { if (errorText) *errorText = WQLocalized(@"The App Group is missing."); return NO; }
+    if (!root) { if (errorText) *errorText = WQLocalized(@"共享容器不可用。"); return NO; }
     NSString *libraryPath = [root.path stringByAppendingPathComponent:@"Library"];
     [NSFileManager.defaultManager createDirectoryAtPath:libraryPath withIntermediateDirectories:YES attributes:nil error:nil];
     int library = WQOpenDirectoryNoLinks(libraryPath);
@@ -2127,7 +2127,7 @@ void wq_enumerate_invalidate(void)
     @synchronized (gSharedScanGuard) { wq_scan_slots_clear(); }
     wq_label_caches_invalidate();
     // A refresh also retries the background LaunchServices database search.
-    [NSUserDefaults.standardUserDefaults removeObjectForKey:@"WQLaunchServicesDiscoveryMissedAt"];
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:@"WQLSDiscoveryMissedAt"];
 }
 
 
@@ -2192,13 +2192,13 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *wq_lsapi_list_containers
     Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
     SEL defaultSel = NSSelectorFromString(@"defaultWorkspace");
     SEL appsSel = NSSelectorFromString(@"allInstalledApplications");
-    if (!workspaceClass || ![workspaceClass respondsToSelector:defaultSel]) { *summary = @"LaunchServices API: unavailable"; return nil; }
+    if (!workspaceClass || ![workspaceClass respondsToSelector:defaultSel]) { *summary = @"LS API: unavailable"; return nil; }
     NSMutableDictionary<NSString *, NSString *> *labels = [NSMutableDictionary new];
     NSUInteger proxies = 0, plugins = 0;
     @try {
         id (*send)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
         id workspace = send(workspaceClass, defaultSel);
-        if (![workspace respondsToSelector:appsSel]) { *summary = @"LaunchServices API: no application list"; return nil; }
+        if (![workspace respondsToSelector:appsSel]) { *summary = @"LS API: no application list"; return nil; }
         NSArray *apps = send(workspace, appsSel);
         SEL containerSel = NSSelectorFromString(@"dataContainerURL"), idSel = NSSelectorFromString(@"bundleIdentifier");
         SEL pluginsSel = NSSelectorFromString(@"plugInKitPlugins");
@@ -2217,7 +2217,7 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *wq_lsapi_list_containers
             for (id plugin in [appPlugins isKindOfClass:NSArray.class] ? appPlugins : @[]) { plugins++; add(plugin); }
         }
     } @catch (NSException *exception) {
-        *summary = [NSString stringWithFormat:@"LaunchServices API: %@", exception.reason];
+        *summary = [NSString stringWithFormat:@"LS API: %@", exception.reason];
         return nil;
     }
     NSMutableDictionary<NSString *, NSMutableArray *> *found = [NSMutableDictionary new];
@@ -2225,7 +2225,7 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *wq_lsapi_list_containers
     for (NSString *path in labels) [found[path.stringByDeletingLastPathComponent] addObject:path];
     NSMutableDictionary *result = [NSMutableDictionary new];
     for (NSString *root in roots) result[root] = [found[root] sortedArrayUsingSelector:@selector(compare:)];
-    *summary = [NSString stringWithFormat:@"LaunchServices API: %lu apps and %lu plug-ins, %lu data containers (%lu apps, %lu extensions)",
+    *summary = [NSString stringWithFormat:@"LS API: %lu apps and %lu plug-ins, %lu data containers (%lu apps, %lu extensions)",
                 (unsigned long)proxies, (unsigned long)plugins, (unsigned long)labels.count,
                 (unsigned long)[result[roots[0]] count], (unsigned long)[result[roots[1]] count]];
     NSMutableDictionary *identities = [NSMutableDictionary new];
@@ -2246,7 +2246,7 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *wq_mcm_list_containers(N
     NSMutableDictionary<NSString *, NSMutableSet<NSString *> *> *found = [NSMutableDictionary new];
     for (NSString *root in roots) found[root] = [NSMutableSet new];
     NSMutableArray *perClass = [NSMutableArray new];
-    void *mgr = dlopen(WQObfContainermanagerPath(), RTLD_NOW | RTLD_LOCAL);
+    void *mgr = dlopen(_wq2(), RTLD_NOW | RTLD_LOCAL);
     if (!mgr) { *summary = @"container manager unavailable"; return nil; }
     cq_create_fn create = (cq_create_fn)WQSym(mgr, kO00, sizeof(kO00));
     cq_set_u64_fn setClass = (cq_set_u64_fn)WQSym(mgr, kO01, sizeof(kO01));
@@ -2397,7 +2397,7 @@ static WQScanCancellation *wq_full_scan_begin(NSString *what, int64_t ids, doubl
     // scan would only produce a list of unusable folders.
     if (!wq_app_group()) {
         atomic_store(&gFullScanDeclined, YES);
-        wq_log(@"scan: no App Group; full scan of %@ skipped", what);
+        wq_log(@"scan: no group; full scan of %@ skipped", what);
         return nil;
     }
     if (!wq_full_scan_acquire(what, caller)) return nil;
@@ -2521,7 +2521,7 @@ NSString *wq_ls_discover_store(void)
 // remembered database: look for it in the background (the same bounded id
 // search), so app names and labels don't stay missing after a cold start.
 // One search at a time; after a miss, again only after a day or a refresh.
-static NSString *const kWQStoreDiscoveryMissKey = @"WQLaunchServicesDiscoveryMissedAt";
+static NSString *const kWQStoreDiscoveryMissKey = @"WQLSDiscoveryMissedAt";
 static _Atomic BOOL gStoreDiscoveryRunning;
 
 static void wq_discover_ls_store_in_background(fsid_t fsid)
@@ -2539,9 +2539,9 @@ static void wq_discover_ls_store_in_background(fsid_t fsid)
             NSUInteger listed = store ? gContainerListProvider(store).count : 0;
             if (listed < 2) {
                 [NSUserDefaults.standardUserDefaults setObject:NSDate.date forKey:kWQStoreDiscoveryMissKey];
-                wq_log(@"scan: LaunchServices database for app names %@", store ? @"found but not usable" : @"not found by id");
+                wq_log(@"scan: LS db for app names %@", store ? @"found but not usable" : @"not found by id");
             } else {
-                wq_log(@"scan: LaunchServices database for app names found by id (%lu containers)", (unsigned long)listed);
+                wq_log(@"scan: LS db for app names found by id (%lu containers)", (unsigned long)listed);
             }
         } @finally {
             atomic_store(&gStoreDiscoveryRunning, NO);
@@ -2577,13 +2577,13 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *wq_containers_from_ls_st
         if (maxInode <= 0) return nil;
         NSString *store = wq_scan_for_ls_store(fsid, maxInode, qos, progress);
         if (!store) {
-            wq_log(@"scan: no LaunchServices database found by id (%.1f s)", CFAbsoluteTimeGetCurrent() - started);
+            wq_log(@"scan: no LS db found by id (%.1f s)", CFAbsoluteTimeGetCurrent() - started);
             return nil;
         }
         paths = gContainerListProvider(store);
         how = [NSString stringWithFormat:@"found by id in %.1f s", CFAbsoluteTimeGetCurrent() - started];
         if (paths.count < 2) {
-            wq_log(@"scan: the LaunchServices database at %@ couldn't be read or lists no containers", store);
+            wq_log(@"scan: LS db at %@ couldn't be read or lists no containers", store);
             return nil;
         }
     }
@@ -2591,14 +2591,14 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *wq_containers_from_ls_st
     NSMutableArray *normalized = [NSMutableArray arrayWithCapacity:paths.count];
     for (NSString *path in paths) [normalized addObject:wq_norm(path)];
     paths = wq_existing_containers(normalized, &stale);
-    if (stale) wq_log(@"scan: %lu containers in the LaunchServices database no longer exist (earlier installs); skipped", (unsigned long)stale);
+    if (stale) wq_log(@"scan: %lu containers in LS db no longer exist (earlier installs); skipped", (unsigned long)stale);
     NSMutableDictionary<NSString *, NSMutableArray *> *byRoot = [NSMutableDictionary new];
     for (NSString *root in roots) byRoot[root] = [NSMutableArray new];
     for (NSString *path in paths) [byRoot[path.stringByDeletingLastPathComponent] addObject:path];
     if ([byRoot[roots[0]] count] < 2) return nil;
     NSMutableDictionary *result = [NSMutableDictionary new];
     for (NSString *root in roots) result[root] = [byRoot[root] sortedArrayUsingSelector:@selector(compare:)];
-    wq_log(@"scan: %lu apps, %lu extensions from the LaunchServices database (%@); daemon containers aren't listed there",
+    wq_log(@"scan: %lu apps, %lu extensions from LS db (%@); daemon containers aren't listed there",
            (unsigned long)[result[roots[0]] count], (unsigned long)[result[roots[1]] count], how);
     return result;
 }
@@ -2886,7 +2886,7 @@ NSArray<NSString *> *wq_enumerate(NSString *dir, int64_t maxInode, WQScanCancell
             NSUInteger stale = 0;
             groups = [wq_existing_containers(groups, &stale) mutableCopy];
             [groups sortUsingSelector:@selector(compare:)];
-            wq_log(@"enumerate %@: %lu group containers from the LaunchServices database%@", dir, (unsigned long)groups.count,
+            wq_log(@"enumerate %@: %lu group containers from LS db%@", dir, (unsigned long)groups.count,
                    stale ? [NSString stringWithFormat:@" (%lu no longer exist, skipped)", (unsigned long)stale] : @"");
             if (progress) progress(1, 1, groups.count);
             return groups;
@@ -3330,7 +3330,7 @@ static NSString *wq_container_identifier_lookup(NSString *key, WQLabelIdentity s
         identities = [NSMutableDictionary new];
 
         NSMutableDictionary<NSString *, NSString *> *map = [NSMutableDictionary new];
-        void *mgr = dlopen(WQObfContainermanagerPath(), RTLD_NOW | RTLD_LOCAL);
+        void *mgr = dlopen(_wq2(), RTLD_NOW | RTLD_LOCAL);
         if (mgr) {
             cq_create_fn create = (cq_create_fn)WQSym(mgr, kO00, sizeof(kO00));
             cq_set_u64_fn setClass = (cq_set_u64_fn)WQSym(mgr, kO01, sizeof(kO01));
@@ -3412,14 +3412,14 @@ NSString *wq_container_label(NSString *dir)
         NSString *key = wq_norm(dir);
         fromAPI = gLSAPILabels[key];
         if (fromAPI.length && gLSAPIIdentities && !wq_label_identity_matches(gLSAPIIdentities, key, state, identity)) {
-            wq_log(@"label: LaunchServices API id for %@ belongs to an earlier folder; not used", key.lastPathComponent);
+            wq_log(@"label: LS API id for %@ belongs to an earlier folder; not used", key.lastPathComponent);
             fromAPI = nil;
         }
     }
     NSString *queried = wq_container_identifier_lookup(WQCanonicalVarPath(dir), state, identity);
     // Two caches that disagree about the same folder: trust neither.
     if (fromAPI.length && queried.length && ![fromAPI isEqualToString:queried]) {
-        wq_log(@"label: cached ids for %@ disagree (%@, %@); asking LaunchServices", dir.lastPathComponent, fromAPI, queried);
+        wq_log(@"label: cached ids for %@ disagree (%@, %@); asking LS", dir.lastPathComponent, fromAPI, queried);
     } else {
         if (fromAPI.length) return fromAPI;
         if (queried.length) return queried;

@@ -27,7 +27,7 @@ static const uint8_t kPathC[] = {
 //   2) volatile 的 key 副本：编译器不能当成编译期常量
 //   3) 手写拼接代替 snprintf("%s%s")：避免被 builtin 折叠成常量串
 __attribute__((noinline, optnone))
-char *WQObfStr(const uint8_t *enc, size_t len, char *out, size_t cap)
+char *_wq0(const uint8_t *enc, size_t len, char *out, size_t cap)
 {
     if (!out || cap == 0) return out;
     if (!enc) { out[0] = 0; return out; }
@@ -50,21 +50,21 @@ static void wq_join(const char *a, const char *b, char *out, size_t cap)
     out[o] = 0;
 }
 
-const char *WQObfContainermanagerPath(void)
+const char *_wq2(void)
 {
     static char buf[128];
     if (buf[0]) return buf;
     char a[32] = {0}, b[48] = {0};
-    WQObfStr(kPathA, sizeof(kPathA), a, sizeof(a));
-    WQObfStr(kPathB, sizeof(kPathB), b, sizeof(b));
+    _wq0(kPathA, sizeof(kPathA), a, sizeof(a));
+    _wq0(kPathB, sizeof(kPathB), b, sizeof(b));
     wq_join(a, b, buf, sizeof(buf));
     return buf;
 }
 
-const char *WQObfSandboxPath(void)
+const char *_wq1(void)
 {
     static char buf[96];
     if (buf[0]) return buf;
-    WQObfStr(kPathC, sizeof(kPathC), buf, sizeof(buf));
+    _wq0(kPathC, sizeof(kPathC), buf, sizeof(buf));
     return buf;
 }

@@ -72,21 +72,21 @@ NSArray<WQHealthCheck *> *wq_health_run(void (^stage)(NSString *))
     [checks addObject:wq_check(@"App Group", group ? WQHealthOK : WQHealthFailed,
         group ?: WQLocalized(@"Missing: the tool that signed WQ Files removed it. Re-install with AltStore, SideStore or Impactor.")) ];
 
-    // 2. Other apps' folders.
-    if (stage) stage(WQLocalized(@"Finding other apps' folders…"));
+    // 2. 应用目录.
+    if (stage) stage(WQLocalized(@"正在扫描应用目录…"));
     NSString *home = [NSHomeDirectory() stringByResolvingSymlinksInPath];
     NSArray<NSString *> *containers = group ? wq_enumerate(@"/private/var/mobile/Containers/Data/Application", 0, nil, nil) : nil;
     NSArray<NSString *> *sample = wq_health_sample(containers ?: @[], home, 8);
     WQHealthCheck *folders;
-    if (!group) folders = wq_check(@"Other apps' folders", WQHealthSkipped, WQLocalized(@"Needs the App Group."));
+    if (!group) folders = wq_check(@"应用目录", WQHealthSkipped, WQLocalized(@"需要共享容器。"));
     else if (!containers && wq_full_scan_was_declined())
-        folders = wq_check(@"Other apps' folders", WQHealthSkipped, WQLocalized(@"The scan for them was declined; Apps and the Cache Cleaner stay empty until it runs."));
+        folders = wq_check(@"应用目录", WQHealthSkipped, WQLocalized(@"The scan for them was declined; Apps and the Cache Cleaner stay empty until it runs."));
     else if (!containers)
-        folders = wq_check(@"Other apps' folders", WQHealthFailed, WQLocalized(@"They can't be found on this device (see Log for the reason)."));
+        folders = wq_check(@"应用目录", WQHealthFailed, WQLocalized(@"They can't be found on this device (see Log for the reason)."));
     else if (!sample.count)
-        folders = wq_check(@"Other apps' folders", WQHealthFailed, WQLocalizedFormat(@"Only WQ Files' own folder was found (%lu in total).", (unsigned long)containers.count));
+        folders = wq_check(@"应用目录", WQHealthFailed, WQLocalizedFormat(@"Only WQ Files' own folder was found (%lu in total).", (unsigned long)containers.count));
     else
-        folders = wq_check(@"Other apps' folders", WQHealthOK, WQLocalizedFormat(@"%lu found.", (unsigned long)containers.count));
+        folders = wq_check(@"应用目录", WQHealthOK, WQLocalizedFormat(@"%lu found.", (unsigned long)containers.count));
     [checks addObject:folders];
 
     // 3. Sandbox access: tokens that really open those folders.

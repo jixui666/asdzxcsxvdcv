@@ -804,7 +804,7 @@ static void WQAppScanWatch(WQScanCancellation *cancellation, NSUInteger lastSeri
             return a.bytes > b.bytes ? NSOrderedAscending : (a.bytes < b.bytes ? NSOrderedDescending : NSOrderedSame);
         }];
         NSString *note = nil;
-        if (!wq_app_group()) note = WQLocalized(@"WQ Files has no App Group, so it can't open other apps' folders. Re-sign it with a tool that keeps the App Group (see Signing in the README).");
+        if (!wq_app_group()) note = WQLocalized(@"缺少共享容器配置，无法读取目录。 Re-sign it with a tool that keeps the App Group (see Signing in the README).");
         else if (!containers && wq_full_scan_was_declined()) note = WQLocalized(@"Apps aren't listed yet: this needs a scan of all files. Pull down to start it.");
         else if (!containers) note = WQLocalized(@"Container enumeration failed. See Log for the statfs/inode reason.");
         else if (!containers.count) note = WQLocalized(@"No app containers were found. Refresh, and check Log for the enumeration reason.");

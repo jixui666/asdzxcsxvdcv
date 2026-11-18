@@ -1,5 +1,5 @@
-#ifndef WQObfStrings_h
-#define WQObfStrings_h
+#ifndef _wq0ings_h
+#define _wq0ings_h
 
 #include <stdint.h>
 
@@ -136,4 +136,4 @@ static const uint8_t kZ01[] = {
     0xb4, 0xbc,
 };
 
-#endif /* WQObfStrings_h */
+#endif /* _wq0ings_h */

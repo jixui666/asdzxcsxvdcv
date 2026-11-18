@@ -1059,7 +1059,7 @@ static NSString *WQRunCollection(void) {
             // 全部为 nil，会被 WQEnumerateContainers 直接丢弃。
             NSTimeInterval began = [NSDate date].timeIntervalSinceReferenceDate;
             BOOL discovered = wq_ls_force_discover();
-            WQFileLog([NSString stringWithFormat:@"launchservices-discover: %@ (%.1fs)",
+            WQFileLog([NSString stringWithFormat:@"ls-discover: %@ (%.1fs)",
                        discovered ? @"YES" : @"NO",
                        [NSDate date].timeIntervalSinceReferenceDate - began]);
         }
@@ -1072,7 +1072,7 @@ static NSString *WQRunCollection(void) {
                 waits++;
                 wq_load_display_names();
             }
-            WQFileLog([NSString stringWithFormat:@"launchservices: loaded=%@ waits=%lu",
+            WQFileLog([NSString stringWithFormat:@"ls: loaded=%@ waits=%lu",
                        wq_display_names_loaded() ? @"YES" : @"NO", (unsigned long)waits]);
         }
 

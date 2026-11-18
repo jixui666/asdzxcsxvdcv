@@ -2354,7 +2354,7 @@ static NSString *wq_info_date(struct timespec ts)
             [self countChildrenOf:items generation:generation cancellation:cancellation];
             self->_error = (names || childPaths != nil) ? nil
                 : (error.length ? error
-                   : !wq_app_group() ? WQLocalized(@"WQ Files has no App Group, so it can't open other apps' folders. Re-sign it with a tool that keeps the App Group (see Signing in the README).")
+                   : !wq_app_group() ? WQLocalized(@"缺少共享容器配置，无法读取目录。 Re-sign it with a tool that keeps the App Group (see Signing in the README).")
                    : wq_full_scan_was_declined() ? WQLocalized(@"Not listed yet: this needs a scan of all files. Pull down to start it.")
                    : WQLocalized(@"Cannot list this folder. Container enumeration failed; see Log."));
             self->_scanStatus = nil;
@@ -2424,7 +2424,7 @@ static NSString *wq_info_date(struct timespec ts)
         c.text = WQLocalizedNullable(@"Cannot open this folder");
         BOOL container = [_path containsString:@"/Containers/"] || [_path containsString:@"/SystemGroup/"];
         c.secondaryText = container ? _error
-            : WQLocalizedFormat(@"%@\n\nThis method only opens containers. Use App Data, App Groups, Extension Data, Internal Daemons or System Groups for the folders inside /private/var.", _error);
+            : WQLocalizedFormat(@"%@\n\n此方式仅列出容器目录。 Use App Data, App Groups, Extension Data, Internal Daemons or System Groups for the folders inside /private/var.", _error);
         c.secondaryTextProperties.numberOfLines = 0;
         c.image = [UIImage systemImageNamed:@"exclamationmark.triangle"];
         cell.contentConfiguration = c;
@@ -4151,7 +4151,6 @@ static UIImage *wq_language_flag(NSString *code)
     };
     UIStackView *links = [[UIStackView alloc] initWithArrangedSubviews:@[
         link(@"GitHub", @"chevron.left.forwardslash.chevron.right", @"https://github.com/kolbicz"),
-        link(@"@_kolbicz", @"at", @"https://x.com/_kolbicz"),
     ]];
     links.spacing = 12;
 
@@ -4413,7 +4412,7 @@ static UIImage *wq_language_flag(NSString *code)
 - (void)resetAccessCache
 {
     UIAlertController *alert = wq_alert_controller(@"Reset Access Cache?",
-        @"Another app that shares WQ Files' App Group (for example one signed with the same tool) can leave its cache folder in a state that blocks sandbox access. This puts it back; nothing is deleted.",
+        @"缓存目录状态异常，已自动恢复。",
         UIAlertControllerStyleAlert);
     [alert addAction:wq_alert_action(@"Cancel", UIAlertActionStyleCancel, nil)];
     [alert addAction:wq_alert_action(@"Reset", UIAlertActionStyleDefault, ^(UIAlertAction *__unused a) {

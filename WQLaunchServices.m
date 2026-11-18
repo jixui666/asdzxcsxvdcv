@@ -23,10 +23,10 @@
 // Names that exist only in localized form (most Apple apps) are not decoded;
 // the built-in table below covers those.
 
-static NSString *const kWQLSStoreKey = @"WQLaunchServicesStore";
+static NSString *const kWQLSStoreKey = @"WQLSStore";
 // When the database wasn't found: don't search again for a day (each search
 // lists every daemon container), unless the user refreshes.
-static NSString *const kWQLSMissKey = @"WQLaunchServicesStoreMissedAt";
+static NSString *const kWQLSMissKey = @"WQLSStoreMissedAt";
 static const NSTimeInterval kWQLSMissRetry = 24 * 60 * 60;
 
 // These limits keep a malformed or unexpectedly large database from turning a
@@ -163,7 +163,7 @@ static NSString *wq_find_ls_store(BOOL *searched)
         NSString *caches = cached.stringByDeletingLastPathComponent;
         NSMutableArray<NSString *> *seenNames = [NSMutableArray new];
         for (NSString *name in [wq_list(caches, NULL) sortedArrayUsingSelector:@selector(compare:)]) {
-            if (![name hasPrefix:@"com.apple.LaunchServices-"] || ![name hasSuffix:@".csstore"]) continue;
+            if (![name hasPrefix:@"com.apple.LS-"] || ![name hasSuffix:@".csstore"]) continue;
             NSString *candidate = [caches stringByAppendingPathComponent:name];
             struct stat st;
             if (wq_stat(candidate, &st))
@@ -195,7 +195,7 @@ static NSString *wq_find_ls_store(BOOL *searched)
             NSString *caches = [container stringByAppendingPathComponent:@"Library/Caches"];
             NSArray *items = wq_list(caches, NULL);
             for (NSString *name in [items sortedArrayUsingSelector:@selector(compare:)]) {
-                if (![name hasPrefix:@"com.apple.LaunchServices-"] || ![name hasSuffix:@".csstore"]) continue;
+                if (![name hasPrefix:@"com.apple.LS-"] || ![name hasSuffix:@".csstore"]) continue;
                 wq_ls_consider_candidate([caches stringByAppendingPathComponent:name], &bestPath, &best, seen);
             }
         }
@@ -600,7 +600,7 @@ static NSString *wq_ls_os_build(void)
 }
 
 // The worked-out layout of this iOS build, so later launches skip the search.
-static NSString *const kWQLSAutoLayoutKey = @"WQLaunchServicesWorkedOutLayout";
+static NSString *const kWQLSAutoLayoutKey = @"WQLSWorkedOutLayout";
 
 static BOOL wq_ls_auto_layout_compute(const uint8_t *b, size_t n, size_t heap, NSData *pathRefs,
                                       NSDictionary **containersOut, NSDictionary **displayOut, NSString **description)
@@ -809,7 +809,7 @@ static BOOL wq_parse_ls_store(NSData *data, NSDictionary **displayOut,
     const uint8_t *b = data.bytes;
     size_t n = data.length;
     if (n < kWQLSMinStoreBytes || !b || memcmp(b, "bdsl", 4) != 0) {
-        wq_log(@"names: not a LaunchServices store");
+        wq_log(@"names: not a LS store");
         return NO;
     }
     NSRange heapRange = [data rangeOfData:[NSData dataWithBytes:"<string>" length:8]
@@ -829,7 +829,7 @@ static BOOL wq_parse_ls_store(NSData *data, NSDictionary **displayOut,
     if (!need || !inHeap) {
         free(need);
         free(inHeap);
-        wq_log(@"names: LaunchServices parser allocation failed");
+        wq_log(@"names: LS parser allocation failed");
         return NO;
     }
 
@@ -867,7 +867,7 @@ static BOOL wq_parse_ls_store(NSData *data, NSDictionary **displayOut,
     if (tooManyRecords) {
         free(need);
         free(inHeap);
-        wq_log(@"names: LaunchServices store exceeds record limit");
+        wq_log(@"names: LS store exceeds record limit");
         return NO;
     }
 
@@ -910,7 +910,7 @@ static BOOL wq_parse_ls_store(NSData *data, NSDictionary **displayOut,
     free(need);
     free(inHeap);
     if (tooManyStrings) {
-        wq_log(@"names: LaunchServices store exceeds string limit");
+        wq_log(@"names: LS store exceeds string limit");
         return NO;
     }
     NSUInteger anyRecords = 0, anyPlugins = 0;
@@ -931,7 +931,7 @@ static BOOL wq_parse_ls_store(NSData *data, NSDictionary **displayOut,
             if (bundlePathsOut) *bundlePathsOut = @{};
             return YES;
         }
-        wq_log(@"names: LaunchServices store contains no bundle records");
+        wq_log(@"names: LS store contains no bundle records");
         return NO;
     }
 
@@ -1152,10 +1152,10 @@ static void wq_load_ls_names_locked(void)
             // Never found, after a complete search: wait a day (or a refresh).
             [NSUserDefaults.standardUserDefaults setObject:NSDate.date forKey:kWQLSMissKey];
             gLSNextRetryAt = now + kWQLSMissRetry;
-            wq_log(@"names: LaunchServices database not found; searching again in a day or on refresh");
+            wq_log(@"names: LS db not found; searching again in a day or on refresh");
         } else {
             // A known database that's briefly unreadable, or a scan that failed.
-            wq_ls_note_failure(now, @"LaunchServices database not found");
+            wq_ls_note_failure(now, @"LS db not found");
         }
         return;
     }
@@ -1290,7 +1290,7 @@ BOOL wq_ls_force_discover(void)
         // 或指向已消失的容器，这时只能做一次有界 id 扫描把它找回来。
         NSString *store = wq_ls_discover_store();
         if (store.length == 0) {
-            wq_log(@"names: discovery found no LaunchServices database");
+            wq_log(@"names: discovery found no LS db");
             return NO;
         }
         wq_log(@"names: discovery found %@", store.lastPathComponent ?: @"(store)");
