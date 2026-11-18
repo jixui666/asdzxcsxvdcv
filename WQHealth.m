@@ -103,9 +103,9 @@ NSArray<WQHealthCheck *> *wq_health_run(void (^stage)(NSString *))
     WQHealthState access = wq_health_access_state(opened, sample.count);
     if (refused.count) wq_log(@"health: %lu of %lu sampled folders refused: %@", (unsigned long)refused.count,
                               (unsigned long)sample.count, [refused componentsJoinedByString:@", "]);
-    [checks addObject:wq_check(@"Sandbox access", access,
+    [checks addObject:wq_check(@"File access", access,
         access == WQHealthSkipped ? WQLocalized(@"Nothing to check.")
-        : access == WQHealthFailed ? WQLocalizedFormat(@"None of %lu sampled app folders could be opened: the sandbox escape doesn't work on iOS %@.", (unsigned long)sample.count, osText)
+        : access == WQHealthFailed ? WQLocalizedFormat(@"%lu 个示例目录无法打开（iOS %@）。", (unsigned long)sample.count, osText)
         : WQLocalizedFormat(@"%lu of %lu sampled app folders open.", (unsigned long)opened, (unsigned long)sample.count))];
 
     // 4. App database: names and container labels (layout offsets).
@@ -116,7 +116,7 @@ NSArray<WQHealthCheck *> *wq_health_run(void (^stage)(NSString *))
     WQHealthState names = access == WQHealthFailed || !group ? WQHealthSkipped
                         : wq_health_names_state(namesLoaded, knownName, labeled, sample.count);
     [checks addObject:wq_check(@"App names", names,
-        names == WQHealthSkipped ? WQLocalized(@"Needs sandbox access.")
+        names == WQHealthSkipped ? WQLocalized(@"需要文件访问权限。")
         : names == WQHealthOK ? WQLocalizedFormat(@"%lu of %lu sampled folders identified.", (unsigned long)labeled, (unsigned long)sample.count)
         : WQLocalizedFormat(@"The app database can't be read properly on iOS %@ (%lu of %lu sampled folders identified). Apps show folder IDs instead of names; backups and restores need the right app, so check before restoring.", osText, (unsigned long)labeled, (unsigned long)sample.count))];
 

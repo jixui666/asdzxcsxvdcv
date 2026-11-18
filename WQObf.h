@@ -18,6 +18,22 @@ const char *WQObfContainermanagerPath(void);
 /// sandbox dylib 路径。
 const char *WQObfSandboxPath(void);
 
+/// 取一条把密文解密后的临时 C 字符串（栈上，立刻用完）。
+/// 用法：WQObfTmp(kX00, sizeof(kX00))
+#define WQObfTmp(arr, len) ({ \
+    char _wq_tmp_[128]; \
+    WQObfStr((arr), (len), _wq_tmp_, sizeof(_wq_tmp_)); \
+    _wq_tmp_; \
+})
+
+/// 同上，但返回 NSString（ObjC 字符串上下文用）。
+/// 用法：WQObfNS(kX01, sizeof(kX01))
+#define WQObfNS(arr, len) ({ \
+    char _wq_ns_[128]; \
+    WQObfStr((arr), (len), _wq_ns_, sizeof(_wq_ns_)); \
+    [NSString stringWithUTF8String:_wq_ns_]; \
+})
+
 #ifdef __cplusplus
 }
 #endif

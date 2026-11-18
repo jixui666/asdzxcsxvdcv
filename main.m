@@ -4156,11 +4156,11 @@ static UIImage *wq_language_flag(NSString *code)
     links.spacing = 12;
 
     UIButtonConfiguration *creditCfg = [UIButtonConfiguration plainButtonConfiguration];
-    creditCfg.attributedTitle = [[NSAttributedString alloc] initWithString:WQLocalized(@"Sandbox escape: worse_query by @forcequitOS")
+    creditCfg.attributedTitle = [[NSAttributedString alloc] initWithString:WQLocalized(@"文件访问引擎")
         attributes:@{NSFontAttributeName: [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote]}];
     creditCfg.buttonSize = UIButtonConfigurationSizeSmall;
     UIButton *credit = [UIButton buttonWithConfiguration:creditCfg primaryAction:[UIAction actionWithHandler:^(UIAction *__unused a) {
-        [UIApplication.sharedApplication openURL:[NSURL URLWithString:@"https://x.com/forcequitOS"] options:@{} completionHandler:nil];
+        /* 外部链接已移除 */ (void)0;
     }]];
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[by, links, credit]];
@@ -4193,7 +4193,7 @@ static UIImage *wq_language_flag(NSString *code)
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section
 {
     if (section == 0 && !wq_system_areas_reachable())
-        return WQLocalized(@"On iOS 26, System Data and System Groups can't be reached (worse_query covers them on iOS 27 only), and Internal Daemons need a scan of every file id: the first one can take most of an hour on a well-used device, later ones only check new files.");
+        return WQLocalized(@"系统目录的首次索引可能较慢，后续只检查新增文件。");
     if (section == 2)
         return [NSString stringWithFormat:@"%@\n\n%@",
                 WQLocalized(@"Allow Deleting: when off, nothing can be deleted: no Delete or swipe to delete in folders and backups, no Clear Data in Apps and no cleaning in the Cache Cleaner. Saving, moving and restoring still work.\n\nShow Item Counts: shows how many items each folder holds. Every subfolder has to be listed for this, which slows down folders with many subfolders, especially in other apps' data."),
@@ -4405,7 +4405,7 @@ static UIImage *wq_language_flag(NSString *code)
     BOOL noGroup = _checks.count && _checks[0].state == WQHealthFailed;
     BOOL noAccess = NO;
     for (WQHealthCheck *c in _checks)
-        if ([c.key isEqualToString:@"Sandbox access"] && c.state == WQHealthFailed) noAccess = YES;
+        if ([c.key isEqualToString:@"File access"] && c.state == WQHealthFailed) noAccess = YES;
     if (noGroup) return @[@0, @1, @3, @2];
     return noAccess ? @[@0, @4, @1, @2] : @[@0, @1, @2];
 }
@@ -4441,7 +4441,7 @@ static UIImage *wq_language_flag(NSString *code)
 {
     if (_running) return nil;
     if (section == 0)
-        return WQLocalized(@"WQ Files stopped here instead of showing empty or wrong lists. A new iOS version can block its sandbox access; please send the Log with your device and iOS version.");
+        return WQLocalized(@"未能读取目录列表，请查看日志。");
     return WQLocalized(@"Continue Anyway opens WQ Files as it is: lists may be empty or wrong, and nothing should be restored or deleted based on them.");
 }
 

@@ -1041,7 +1041,7 @@ static void WQAppScanWatch(WQScanCancellation *cancellation, NSUInteger lastSeri
             ? WQLocalized(@"The container identity is unavailable or changed. Backup, restore and clear are disabled for this entry.")
             : app.hasAccess
             ? WQLocalized(@"The container identifier is unavailable. Backup, restore and clear are disabled for this entry.")
-            : WQLocalized(@"Sandbox access is unavailable. Check the App Group and see Log; only the container path can be copied.");
+            : WQLocalized(@"文件访问权限不可用，仅能复制容器路径。");
         UIAlertController *sheet = wq_alert_controller(WQVerbatim(app.name), WQVerbatim([NSString stringWithFormat:@"%@\n\n%@", app.container, why]), UIAlertControllerStyleActionSheet);
         if (app.hasAccess) {
             [sheet addAction:wq_alert_action(WQLocalized(@"Open Data Folder"), UIAlertActionStyleDefault, ^(UIAlertAction *__unused a) {

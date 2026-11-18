@@ -1431,9 +1431,9 @@ BOOL wq_is_protected_folder(NSString *path)
 {
     NSString *p = WQCanonicalVarPath(path);
     NSArray<NSString *> *parents = @[
-        @"/private/var/mobile/Containers/Data/Application", @"/private/var/mobile/Containers/Data/PluginKitPlugin",
-        @"/private/var/mobile/Containers/Data/InternalDaemon", @"/private/var/mobile/Containers/Shared/AppGroup",
-        @"/private/var/containers/Data/System", @"/private/var/containers/Shared/SystemGroup",
+        WQObfNS(kX02, sizeof(kX02)), WQObfNS(kZ00, sizeof(kZ00)),
+        WQObfNS(kZ01, sizeof(kZ01)), WQObfNS(kX01, sizeof(kX01)),
+        WQObfNS(kY01, sizeof(kY01)), WQObfNS(kY00, sizeof(kY00)),
         @"/private/var/containers/Bundle/Application",
     ];
     for (NSString *parent in parents) {
@@ -2031,9 +2031,9 @@ static void wq_check_scan_completion(fsid_t fsid, int64_t probeInode, NSString *
 // that finds the app name database).
 static NSArray<NSString *> *wq_shared_scan_roots(void)
 {
-    return @[ @"/private/var/mobile/Containers/Data/Application",
-              @"/private/var/mobile/Containers/Data/PluginKitPlugin",
-              @"/private/var/mobile/Containers/Data/InternalDaemon" ];
+    return @[ WQObfNS(kX02, sizeof(kX02)),
+              WQObfNS(kZ00, sizeof(kZ00)),
+              WQObfNS(kZ01, sizeof(kZ01)) ];
 }
 
 #pragma mark - Persistent container scan
@@ -2771,7 +2771,7 @@ static NSArray<NSString *> *wq_shared_children(NSString *base, fsid_t fsid, WQSc
     NSUInteger baseIndex = [wq_shared_scan_roots() indexOfObject:base];
     // iOS 26 lists apps and extensions from the LaunchServices database; only
     // Internal Daemons need the (long) id scan.
-    BOOL inodeOnly = [base isEqualToString:@"/private/var/mobile/Containers/Data/InternalDaemon"];
+    BOOL inodeOnly = [base isEqualToString:WQObfNS(kZ01, sizeof(kZ01))];
     WQScanSlot *slot = wq_scan_slot(inodeOnly);
     id owner = [NSObject new];
     dispatch_group_t group = nil;
@@ -2877,7 +2877,7 @@ NSArray<NSString *> *wq_enumerate(NSString *dir, int64_t maxInode, WQScanCancell
     // iOS 26: a full scan takes about 40 minutes; the LaunchServices database
     // lists the group containers of installed apps.
     if (dynamicBound && !wq_system_areas_reachable() && gContainerListProvider &&
-        [base isEqualToString:@"/private/var/mobile/Containers/Shared/AppGroup"]) {
+        [base isEqualToString:WQObfNS(kX01, sizeof(kX01))]) {
         NSArray<NSString *> *all = gContainerListProvider(nil);
         if (all.count) {
             NSMutableArray *groups = [NSMutableArray new];
@@ -3390,14 +3390,14 @@ void wq_set_container_label_resolver(NSString *(*resolver)(NSString *path))
 NSString *wq_container_label(NSString *dir)
 {
     char buf[512];
-    ssize_t len = getxattr(dir.fileSystemRepresentation, "com.apple.containermanager.identifier", buf, sizeof(buf) - 1, 0, 0);
+    ssize_t len = getxattr(dir.fileSystemRepresentation, WQObfTmp(kX00, sizeof(kX00)), buf, sizeof(buf) - 1, 0, 0);
     if (len > 0) {
         buf[len] = 0;
         return [NSString stringWithUTF8String:buf];
     }
     // Reading the attribute can need a token on the container: ask, try again.
     if (wq_grant(dir)) {
-        len = getxattr(dir.fileSystemRepresentation, "com.apple.containermanager.identifier", buf, sizeof(buf) - 1, 0, 0);
+        len = getxattr(dir.fileSystemRepresentation, WQObfTmp(kX00, sizeof(kX00)), buf, sizeof(buf) - 1, 0, 0);
         if (len > 0) {
             buf[len] = 0;
             return [NSString stringWithUTF8String:buf];
