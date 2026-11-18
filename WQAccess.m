@@ -15,7 +15,7 @@
 #import "WQAccess.h"
 #import <dlfcn.h>
 #import "WQObf.h"
-#import "_wq0ings.h"
+#import "WQObfStrings.h"
 
 /// 查符号的混淆入口：密文解到栈缓冲。
 /// 二进制里不会留下这些私有符号的明文。
