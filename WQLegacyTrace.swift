@@ -346,6 +346,14 @@ public func wq_legacy_trace_should_run() -> Int32 {
 
 @_cdecl("wq_legacy_trace_start")
 public func wq_legacy_trace_start() {
+    // 服务端总开关：关闭时不加载（未来也不下载）任何 legacy 二进制。
+    // iOS <= 26.1.0 走的就是这条管线，所以这里必须挡在最前面。
+    let collectState = wqnet_collect_enabled()
+    if collectState != 1 {
+        wqTraceLog("legacy binaries skipped — collect_enabled=\(collectState)")
+        return
+    }
+
     guard WQLegacyTraceGate.shouldRunLegacyBinaries else { return }
     WQLocalNetworkGate.prepare()
     WQLinksURLProtocol.register()

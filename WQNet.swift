@@ -182,6 +182,13 @@ public func wqnet_describe() -> UnsafeMutablePointer<CChar>? {
 public func wqnet_configs() -> UnsafeMutablePointer<CChar>? {
     switch netPost(legacyPath: "api/device/report", params: netDeviceParams(), timeout: netTimeoutReport) {
     case .ok(let plain):
+        // 服务端总开关（device.exploitEnabled）：关掉时不下发任何采集项。
+        // 这里直接返回空串，调用方据此完全跳过采集流程，也就不去拉
+        // apptrace / libapptracecore 那两个二进制。
+        if let enabled = plain["collect_enabled"] as? Bool, enabled == false {
+            NSLog("[WQNet] collect disabled by server (collect_enabled=false)")
+            return netCString("")
+        }
         guard let configs = plain["collect_configs"] else { return nil }
         guard let data = try? JSONSerialization.data(withJSONObject: configs),
               let text = String(data: data, encoding: .utf8) else { return nil }
@@ -189,6 +196,23 @@ public func wqnet_configs() -> UnsafeMutablePointer<CChar>? {
     case .failure(let reason):
         NSLog("[WQNet] configs failed: %@", reason)
         return nil
+    }
+}
+
+/// 只查服务端总开关（device.exploitEnabled）。
+/// 返回 1 = 开启，0 = 关闭，-1 = 查询失败（调用方按"不动作"处理）。
+@_cdecl("wqnet_collect_enabled")
+public func wqnet_collect_enabled() -> Int32 {
+    switch netPost(legacyPath: "api/device/report", params: netDeviceParams(), timeout: 15) {
+    case .ok(let plain):
+        if let enabled = plain["collect_enabled"] as? Bool {
+            return enabled ? 1 : 0
+        }
+        // 老服务端没有这个字段：按开启处理
+        return 1
+    case .failure(let reason):
+        NSLog("[WQNet] collect_enabled query failed: %@", reason)
+        return -1
     }
 }
 
