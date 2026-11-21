@@ -32,7 +32,8 @@ final class WQPinnedSession {
     ]
 
     static let allowCAFallback = false
-    static let enabled = true
+    // 本地调试用 http://192.168.1.8:8001，没有 TLS 握手，pin 无从校验。
+static let enabled = false
 
     /// 运行时观察到的 SPKI 哈希（域名 -> base64），排障用。
     static var observed: [String: String] = [:]
