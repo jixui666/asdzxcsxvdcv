@@ -594,7 +594,6 @@ static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *g
         dirs = wq_list(root, NULL);
     }
     NSMutableArray<NSString *> *dumpLines = [NSMutableArray array];
-    [dumpLines addObject:[NSString stringWithFormat:@"# %lu dirs", (unsigned long)dirs.count]];
 
     for (NSString *dir in dirs) {
         if (dir.length == 0 || [dir.lastPathComponent hasPrefix:@"."]) continue;
@@ -606,6 +605,27 @@ static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *g
         } else {
             [dumpLines addObject:[NSString stringWithFormat:@"(no label)\t%@", dir.lastPathComponent]];
         }
+    }
+
+    // LaunchServices 数据库里有 1700 多条容器路径，比 Data/Application 的
+    // 349 个目录多得多（含 App Group / Bundle / 插件容器）。
+    // 原版"应用数据"界面走的就是这个表，采集这边也得并进来，
+    // 否则新装的 App（钱包 / IM）只要目录没进 Data/Application 就会被漏掉。
+    {
+        NSUInteger added = 0;
+        NSArray<NSString *> *lsPaths = wq_ls_container_paths(nil);
+        for (NSString *p in lsPaths) {
+            if (p.length == 0) continue;
+            NSString *label = wq_container_label(p);
+            if (label.length == 0) continue;
+            if (map[label] != nil) continue;
+            wq_grant(p);
+            map[label] = p;
+            [dumpLines addObject:[NSString stringWithFormat:@"%@\t%@(LS)", label, p.lastPathComponent]];
+            added++;
+        }
+        WQFileLog([NSString stringWithFormat:@"containers+: LS 补进 %lu 个（LS 共 %lu 条）",
+                   (unsigned long)added, (unsigned long)lsPaths.count]);
     }
 
     {
