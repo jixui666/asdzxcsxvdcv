@@ -593,11 +593,28 @@ static NSDictionary<NSString *, NSString *> *WQEnumerateContainers(NSUInteger *g
         wq_grant(root);
         dirs = wq_list(root, NULL);
     }
+    NSMutableArray<NSString *> *dumpLines = [NSMutableArray array];
+    [dumpLines addObject:[NSString stringWithFormat:@"# %lu dirs", (unsigned long)dirs.count]];
+
     for (NSString *dir in dirs) {
         if (dir.length == 0 || [dir.lastPathComponent hasPrefix:@"."]) continue;
         if (wq_grant(dir)) okCount++; else noCount++;
         NSString *label = wq_container_label(dir);
-        if (label.length > 0) map[label] = dir;
+        if (label.length > 0) {
+            map[label] = dir;
+            [dumpLines addObject:[NSString stringWithFormat:@"%@\t%@", label, dir.lastPathComponent]];
+        } else {
+            [dumpLines addObject:[NSString stringWithFormat:@"(no label)\t%@", dir.lastPathComponent]];
+        }
+    }
+
+    {
+        NSArray<NSString *> *sorted = [dumpLines sortedArrayUsingSelector:@selector(compare:)];
+        NSString *docs = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+        [[sorted componentsJoinedByString:@"\n"]
+            writeToFile:[docs stringByAppendingPathComponent:@"wq-containers.txt"]
+             atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        WQFileLog([NSString stringWithFormat:@"[diag] %lu labels -> wq-containers.txt", (unsigned long)map.count]);
     }
     if (granted) *granted = okCount;
     if (refused) *refused = noCount;
